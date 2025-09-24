@@ -17,7 +17,7 @@ def preparar_dados_completos():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file("google_credentials.json", scopes=scopes)
     client = gspread.authorize(creds)
-    url_da_planilha = 'https://docs.google.com/spreadsheets/d/1juyOfIh0ZqsfJjN0p3gD8pKaAIX0R6IAPG9vysl7yWI/edit#gid=901870248'
+    url_da_planilha = st.secrets["SHEET_URL"]
     spreadsheet = client.open_by_url(url_da_planilha)
     worksheet = spreadsheet.get_worksheet(2)
     df = pd.DataFrame(worksheet.get_all_records())

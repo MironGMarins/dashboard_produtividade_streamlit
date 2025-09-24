@@ -8,5 +8,6 @@ __pycache__/
 # NUNCA ENVIAR ESTE ARQUIVO!
 google_credentials.json
 
+.streamlit/
 # Ignorar arquivos do sistema operacional
 .DS_Store
