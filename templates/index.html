@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Tarefas</title>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f0f2f6;
+            color: #333;
+            margin: 0;
+            padding: 2em;
+        }
+        h1 {
+            text-align: center;
+            color: #1e3d59;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 2em;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .botoes-painel {
+            text-align: center;
+            margin-bottom: 2em;
+        }
+        .botoes-painel button {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin: 0 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            cursor: pointer;
+            background-color: #f7f7f7;
+            transition: background-color 0.2s, color 0.2s;
+        }
+        .botoes-painel button.active {
+            background-color: #1e3d59;
+            color: white;
+            border-color: #1e3d59;
+        }
+        #grafico {
+            width: 100%;
+            height: 450px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Dashboard Interativo de Tarefas</h1>
+
+        <div class="botoes-painel">
+            <button id="btn-dia" class="active">Dia do Mês</button>
+            <button id="btn-semana">Semana do Mês</button>
+            <button id="btn-dia-semana">Dia da Semana</button>
+        </div>
+
+        <div id="grafico"></div>
+    </div>
+
+    <script>
+        // --- CORREÇÃO PRINCIPAL AQUI ---
+        // Usamos um caminho relativo. O navegador vai automaticamente usar o domínio
+        // de onde a página foi carregada (ex: http://192.168.15.99:5000).
+        const API_URL = "/api/dados";
+        // ---------------------------------
+
+        let dadosCompletos = [];
+
+        async function inicializar() {
+            const divGrafico = document.getElementById('grafico');
+            divGrafico.innerHTML = '<p>Carregando dados...</p>';
+
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) {
+                    throw new Error(`Erro de HTTP! Status: ${response.status}`);
+                }
+                dadosCompletos = await response.json();
+                console.log("Dados recebidos da API:", dadosCompletos);
+                desenharGraficoDiaDoMes();
+            } catch (error) {
+                console.error("Erro ao buscar dados da API:", error);
+                divGrafico.innerHTML = `<p style="color:red; text-align:center;">Falha ao carregar os dados. O servidor backend (api.py) está rodando?</p>`;
+            }
+
+            document.getElementById('btn-dia').addEventListener('click', desenharGraficoDiaDoMes);
+            document.getElementById('btn-semana').addEventListener('click', desenharGraficoSemanaDoMes);
+            document.getElementById('btn-dia-semana').addEventListener('click', desenharGraficoDiaDaSemana);
+        }
+
+        function aggregateData(data, groupKeys) {
+            const result = new Map();
+            data.forEach(item => {
+                const key = groupKeys.map(k => item[k]).join('-');
+                if (!result.has(key)) {
+                    const groupItem = {};
+                    groupKeys.forEach(k => groupItem[k] = item[k]);
+                    groupItem.count = 0;
+                    result.set(key, groupItem);
+                }
+                result.get(key).count++;
+            });
+            return Array.from(result.values());
+        }
+
+        function desenharGraficoDiaDoMes() {
+            const dadosAgrupados = aggregateData(dadosCompletos, ['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']);
+            const mesesUnicos = [...new Map(dadosAgrupados.map(item => [item['Mes_Ano_Abrev'], item])).values()]
+                .sort((a, b) => a['Ano-Mês'].localeCompare(b['Ano-Mês']));
+            const meses = mesesUnicos.map(d => d.Mes_Ano_Abrev);
+            
+            const dadosAgregadosTodos = new Map();
+            dadosAgrupados.forEach(item => {
+                dadosAgregadosTodos.set(item.Dia, (dadosAgregadosTodos.get(item.Dia) || 0) + item.count);
+            });
+            const aggregatedDataSorted = Array.from(dadosAgregadosTodos.entries())
+                .map(([dia, count]) => ({ Dia: dia, count: count }))
+                .sort((a, b) => a.Dia - b.Dia);
+
+            const traces = [{
+                x: aggregatedDataSorted.map(d => d.Dia),
+                y: aggregatedDataSorted.map(d => d.count),
+                name: 'Todos (Agregado)',
+                mode: 'lines+markers+text',
+                text: aggregatedDataSorted.map(d => d.count),
+                textposition: 'top center'
+            }];
+
+            meses.forEach(mes => {
+                const dadosDoMes = dadosAgrupados
+                    .filter(d => d.Mes_Ano_Abrev === mes)
+                    .sort((a, b) => a.Dia - b.Dia);
+                traces.push({
+                    x: dadosDoMes.map(d => d.Dia),
+                    y: dadosDoMes.map(d => d.count),
+                    name: mes,
+                    mode: 'lines+markers+text',
+                    text: dadosDoMes.map(d => d.count),
+                    textposition: 'top center'
+                });
+            });
+
+            const layout = { title: 'Contagem de Atividades por Dia do Mês', xaxis: {title: 'Dia do Mês'}, yaxis: {title: 'Qtd. de Atividades'} };
+
+            if (meses.length > 1) {
+                const buttons = [];
+                buttons.push({ label: 'Todos os Meses', method: 'restyle', args: ['visible', traces.map((_, i) => i === 0)] });
+                meses.forEach((mes, index) => {
+                    buttons.push({ label: mes, method: 'restyle', args: ['visible', traces.map((_, i) => i === index + 1)] });
+                });
+                layout.updatemenus = [{ buttons: buttons, direction: 'down', active: 0, x: 0.01, xanchor: 'left', y: 1.15, yanchor: 'top' }];
+            }
+            
+            traces.forEach((trace, index) => trace.visible = (index === 0));
+
+            Plotly.newPlot('grafico', traces, layout, {responsive: true});
+            setActiveButton('btn-dia');
+        }
+
+        function desenharGraficoSemanaDoMes() {
+            const dadosAgrupados = aggregateData(dadosCompletos, ['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']);
+            const mesesUnicos = [...new Map(dadosAgrupados.map(item => [item['Mes_Ano_Abrev'], item])).values()]
+                .sort((a, b) => a['Ano-Mês'].localeCompare(b['Ano-Mês']));
+            const meses = mesesUnicos.map(d => d.Mes_Ano_Abrev);
+
+            const dadosAgregadosTodos = new Map();
+            dadosAgrupados.forEach(item => {
+                dadosAgregadosTodos.set(item['Semana do Mês'], (dadosAgregadosTodos.get(item['Semana do Mês']) || 0) + item.count);
+            });
+            const aggregatedDataSorted = Array.from(dadosAgregadosTodos.entries())
+                .map(([semana, count]) => ({ 'Semana do Mês': semana, count: count }))
+                .sort((a, b) => a['Semana do Mês'] - b['Semana do Mês']);
+
+            const traces = [{
+                x: aggregatedDataSorted.map(d => d['Semana do Mês']),
+                y: aggregatedDataSorted.map(d => d.count),
+                name: 'Todos (Agregado)',
+                mode: 'lines+markers+text',
+                text: aggregatedDataSorted.map(d => d.count),
+                textposition: 'top center'
+            }];
+
+            meses.forEach(mes => {
+                const dadosDoMes = dadosAgrupados
+                    .filter(d => d.Mes_Ano_Abrev === mes)
+                    .sort((a, b) => a['Semana do Mês'] - b['Semana do Mês']);
+                 traces.push({
+                    x: dadosDoMes.map(d => d['Semana do Mês']),
+                    y: dadosDoMes.map(d => d.count),
+                    name: mes,
+                    mode: 'lines+markers+text',
+                    text: dadosDoMes.map(d => d.count),
+                    textposition: 'top center'
+                });
+            });
+
+            const layout = { title: 'Contagem de Atividades por Semana do Mês', xaxis: { type: 'category', title: 'Semana do Mês' }, yaxis: {title: 'Qtd. de Atividades'} };
+            
+            if (meses.length > 1) {
+                const buttons = [];
+                buttons.push({ label: 'Todos os Meses', method: 'restyle', args: ['visible', traces.map((_, i) => i === 0)] });
+                meses.forEach((mes, index) => {
+                    buttons.push({ label: mes, method: 'restyle', args: ['visible', traces.map((_, i) => i === index + 1)] });
+                });
+                layout.updatemenus = [{ buttons: buttons, direction: 'down', active: 0, x: 0.01, xanchor: 'left', y: 1.15, yanchor: 'top' }];
+            }
+
+            traces.forEach((trace, index) => trace.visible = (index === 0));
+
+            Plotly.newPlot('grafico', traces, layout, {responsive: true});
+            setActiveButton('btn-semana');
+        }
+
+        function desenharGraficoDiaDaSemana() {
+            const dadosDetalhados = aggregateData(dadosCompletos, ['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Nome Dia Semana', 'Dia da Semana']);
+            dadosDetalhados.forEach(d => d.Filtro = `${d.Mes_Ano_Abrev} / Semana ${d['Semana do Mês']}`);
+            
+            const dadosAgregadosTotal = aggregateData(dadosCompletos, ['Nome Dia Semana', 'Dia da Semana'])
+                .sort((a,b) => a['Dia da Semana'] - b['Dia da Semana']);
+            
+            const traces = [{
+                x: dadosAgregadosTotal.map(d => d['Nome Dia Semana']),
+                y: dadosAgregadosTotal.map(d => d.count),
+                name: 'Total (Agregado)',
+                mode: 'lines+markers+text',
+                text: dadosAgregadosTotal.map(d => d.count),
+                textposition: 'top center'
+            }];
+
+            const filtrosUnicos = [...new Map(dadosDetalhados.map(item => [item['Filtro'], item])).values()]
+                .sort((a, b) => a['Ano-Mês'].localeCompare(b['Ano-Mês']) || a['Semana do Mês'] - b['Semana do Mês']);
+            const filtros = filtrosUnicos.map(d => d.Filtro);
+
+            filtros.forEach(filtro => {
+                const dadosDoFiltro = dadosDetalhados
+                    .filter(d => d.Filtro === filtro)
+                    .sort((a, b) => a['Dia da Semana'] - b['Dia da Semana']);
+                traces.push({
+                    x: dadosDoFiltro.map(d => d['Nome Dia Semana']),
+                    y: dadosDoFiltro.map(d => d.count),
+                    name: filtro,
+                    mode: 'lines+markers+text',
+                    text: dadosDoFiltro.map(d => d.count),
+                    textposition: 'top center'
+                });
+            });
+
+            const layout = {
+                title: 'Contagem de Atividades por Dia da Semana',
+                xaxis: { title: 'Dia da Semana', categoryorder: 'array', categoryarray: ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'] },
+                yaxis: { title: 'Qtd. de Atividades' }
+            };
+
+            if (filtros.length > 0) {
+                const buttons = [];
+                buttons.push({ label: 'Total Agregado', method: 'restyle', args: ['visible', traces.map((_, i) => i === 0)] });
+                filtros.forEach((filtro, index) => {
+                    buttons.push({ label: filtro, method: 'restyle', args: ['visible', traces.map((_, i) => i === index + 1)] });
+                });
+                layout.updatemenus = [{ buttons: buttons, direction: 'down', active: 0, x: 0.01, xanchor: 'left', y: 1.15, yanchor: 'top' }];
+            }
+
+            traces.forEach((trace, index) => trace.visible = (index === 0));
+
+            Plotly.newPlot('grafico', traces, layout, { responsive: true });
+            setActiveButton('btn-dia-semana');
+        }
+        
+        function setActiveButton(activeId) {
+            ['btn-dia', 'btn-semana', 'btn-dia-semana'].forEach(buttonId => {
+                document.getElementById(buttonId).classList.remove('active');
+            });
+            document.getElementById(activeId).classList.add('active');
+        }
+
+        document.addEventListener('DOMContentLoaded', inicializar);
+    </script>
+</body>
+</html>

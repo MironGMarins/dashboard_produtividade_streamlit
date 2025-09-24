@@ -1,0 +1,4 @@
+python -m venv .venv
+Set-Execution-Policy -Execution-Policy RemoteSigned -Scope Process
+http://192.168.15.100:8501
+http://192.168.15.99:8501
