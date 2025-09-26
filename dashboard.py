@@ -14,26 +14,33 @@ import json # Adicionado para carregar os segredos
 # PASSO 2: FUNÇÃO DE CARREGAMENTO E PREPARAÇÃO DOS DADOS (O "MOTOR")
 # Esta função continua em cache para alta performance.
 # ==============================================================================
-@st.cache_data(ttl=600) # Atualiza os dados do Google Sheets a cada 10 minutos
+@st.cache_data(ttl=600)
 def carregar_dados_completos():
     # --- Autenticação Segura ---
+    
+    # --- CORREÇÃO 1: Adicionamos o escopo do Google Drive ---
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.readonly"
+    ]
+
     try:
-        # Tenta usar os segredos do Streamlit (quando estiver online)
         creds_json = st.secrets["gcp_service_account"]
-        creds = Credentials.from_service_account_info(creds_json)
+        # --- CORREÇÃO 2: Passamos os escopos para a função ---
+        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
         st.info("Autenticação via Streamlit Secrets bem-sucedida.", icon="☁️")
     except (FileNotFoundError, KeyError):
-        # Se falhar, usa o arquivo local (para desenvolvimento no VS Code)
-        creds = Credentials.from_service_account_file("google_credentials.json")
+        creds = Credentials.from_service_account_file("google_credentials.json", scopes=scopes)
     
     client = gspread.authorize(creds)
     
-    # --- Carregamento dos dados da planilha ---
-    url_da_planilha = 'https://docs.google.com/spreadsheets/d/1juyOfIh0ZqsfJjN0p3gD8pKaAIX0R6IAPG9vysl7yWI/edit#gid=901870248'
+    # --- Carregamento dos dados da planilha (o resto da função não muda) ---
+    url_da_planilha = st.secrets["SHEET_URL"]
     spreadsheet = client.open_by_url(url_da_planilha)
     worksheet = spreadsheet.get_worksheet(2)
     df = pd.DataFrame(worksheet.get_all_records())
 
+    # ... (o resto da sua lógica de tratamento de dados continua aqui, sem alterações) ...
     # --- Tratamento e Criação de Colunas ---
     df_grafico = df.copy()
     df_grafico['Peso'] = pd.to_numeric(df_grafico['Peso'], errors='coerce').fillna(0)
