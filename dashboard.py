@@ -1,57 +1,69 @@
 # ==============================================================================
-# PASSO 1: IMPORTS CONSOLIDADOS
+# IMPORTS CONSOLIDADOS
 # ==============================================================================
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 import holidays
-import json # Adicionado para carregar os segredos
+import json
+from datetime import date
 
 # ==============================================================================
-# PASSO 2: FUNÇÃO DE CARREGAMENTO E PREPARAÇÃO DOS DADOS (O "MOTOR")
-# Esta função continua em cache para alta performance.
+# CONFIGURAÇÃO DA PÁGINA
+# ==============================================================================
+st.set_page_config(
+    layout="wide",
+    page_title="Dashboard de Produtividade"
+)
+
+# ==============================================================================
+# FUNÇÃO DE CARREGAMENTO DE DADOS (CACHE)
 # ==============================================================================
 @st.cache_data(ttl=600)
 def carregar_dados_completos():
     # --- Autenticação Segura ---
-    
-    # --- CORREÇÃO 1: Adicionamos o escopo do Google Drive ---
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive.readonly"
     ]
-
     try:
         creds_json = st.secrets["gcp_service_account"]
-        # --- CORREÇÃO 2: Passamos os escopos para a função ---
         creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
-        st.info("Autenticação via Streamlit Secrets bem-sucedida.", icon="☁️")
     except (FileNotFoundError, KeyError):
         creds = Credentials.from_service_account_file("google_credentials.json", scopes=scopes)
     
     client = gspread.authorize(creds)
+    url_da_planilha = st.secrets.get("SHEET_URL", 'https://docs.google.com/spreadsheets/d/1juyOfIh0ZqsfJjN0p3gD8pKaAIX0R6IAPG9vysl7yWI/edit#gid=901870248')
     
-    # --- Carregamento dos dados da planilha (o resto da função não muda) ---
-    url_da_planilha = st.secrets["SHEET_URL"]
     spreadsheet = client.open_by_url(url_da_planilha)
-    worksheet = spreadsheet.get_worksheet(2)
-    df = pd.DataFrame(worksheet.get_all_records())
+    
+    # --- Carregamento das Abas ---
+    nome_aba_dados = "Total BaseCamp para Notas" 
+    nome_aba_equipes = "Equipes"
+    worksheet_dados = spreadsheet.worksheet(nome_aba_dados)
+    worksheet_equipe = spreadsheet.worksheet(nome_aba_equipes)
 
-    # ... (o resto da sua lógica de tratamento de dados continua aqui, sem alterações) ...
-    # --- Tratamento e Criação de Colunas ---
-    df_grafico = df.copy()
-    df_grafico['Peso'] = pd.to_numeric(df_grafico['Peso'], errors='coerce').fillna(0)
+    df_dados = pd.DataFrame(worksheet_dados.get_all_records())
+    df_equipe = pd.DataFrame(worksheet_equipe.get_all_records())
+    
+    # --- PREPARAÇÃO DOS DADOS ---
+    df_grafico = df_dados.copy()
+    colunas_para_numerico = ['Peso', 'Pablo', 'Leonardo', 'Itiel', 'Ítalo']
+    for col in colunas_para_numerico:
+        if col in df_grafico.columns:
+            df_grafico[col] = pd.to_numeric(df_grafico[col], errors='coerce').fillna(0)
+
     df_grafico['Data Inicial'] = pd.to_datetime(df_grafico['Data Inicial'], errors='coerce')
     df_grafico['Data Final'] = pd.to_datetime(df_grafico['Data Final'], errors='coerce')
-    df_grafico['Status'] = np.where(df_grafico['Data Final'].isnull(), 'Aberto', 'Executado')
+    df_grafico['Status_Tarefa'] = np.where(df_grafico['Data Final'].isnull(), 'Aberto', 'Executado')
     data_hoje = pd.Timestamp.now().normalize()
     df_grafico['Data Final (aberta)'] = df_grafico['Data Final'].fillna(data_hoje)
 
-    # --- Criação da Tabela Calendário ---
-    data_inicio = df_grafico['Data Inicial'].min()
+    data_inicio = df_grafico['Data Inicial'].min() if pd.notna(df_grafico['Data Inicial'].min()) else pd.Timestamp.now()
     data_fim = pd.Timestamp.now()
     tabela_calendario = pd.DataFrame({"Date": pd.date_range(start=data_inicio, end=data_fim, freq='D')})
     tabela_calendario['Ano'] = tabela_calendario['Date'].dt.year
@@ -60,30 +72,37 @@ def carregar_dados_completos():
     tabela_calendario['Ano-Mês'] = tabela_calendario['Date'].dt.strftime('%Y-%m')
     tabela_calendario['Dia'] = tabela_calendario['Date'].dt.day
     tabela_calendario['Dia da Semana'] = tabela_calendario['Date'].dt.dayofweek + 1
-    tabela_calendario['Nome Dia Semana'] = tabela_calendario['Dia da Semana'].map({1:'seg', 2:'ter', 3:'qua', 4:'qui', 5:'sex', 6:'sab', 7:'dom'})
-    tabela_calendario['Semana do Mês'] = (tabela_calendario['Date'].dt.day + tabela_calendario['Date'].dt.dayofweek - 1) // 7 + 1
+    tabela_calendario['Nome Dia Semana'] = tabela_calendario['Date'].dt.dayofweek.map({0:'seg', 1:'ter', 2:'qua', 3:'qui', 4:'sex', 5:'sab', 6:'dom'})
+    tabela_calendario['Semana do Mês'] = (tabela_calendario['Date'].dt.dayofweek + (tabela_calendario['Date'].dt.day - 1)).floordiv(7) + 1
 
-    # --- União (Merge) Final ---
-    df_analise = pd.merge(df_grafico, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date').drop(columns=['Date'])
+    df_analise_temp = pd.merge(df_grafico, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date').drop(columns=['Date'])
     
+    df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
+    df_analise = pd.merge(df_analise_temp, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
+    df_analise['Status_Funcionario'].fillna('Outros', inplace=True)
+
     return df_analise
 
 # ==============================================================================
-# PASSO 3: FUNÇÃO PARA CRIAR O PAINEL PLOTLY AVANÇADO
+# FUNÇÕES PARA CRIAR OS GRÁFICOS
 # ==============================================================================
-def criar_painel_plotly(df_para_grafico):
-    # --- Preparação de dados para os gráficos ---
-    contagem_diaria = df_para_grafico.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']).size().reset_index(name='Contagem')
-    agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index()
+def criar_grafico_produtividade_mensal(df):
+    if df.empty: return go.Figure()
+    df_agregado = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev']).agg(
+        contagem_tarefas=('ID', 'count'),
+        soma_peso=('Peso', 'sum')
+    ).reset_index().sort_values('Ano-Mês')
 
-    contagem_semanal = df_para_grafico.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']).size().reset_index(name='Contagem')
-    agregado_todas_semanas = contagem_semanal.groupby('Semana do Mês')['Contagem'].sum().reset_index()
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df_agregado['Mes_Ano_Abrev'], y=df_agregado['contagem_tarefas'], name='Quantidade de Tarefas', marker_color='royalblue'))
+    fig.add_trace(go.Scatter(x=df_agregado['Mes_Ano_Abrev'], y=df_agregado['soma_peso'], name='Soma de Peso', mode='lines+markers', line=dict(color='firebrick')))
+    fig.update_layout(title="<b>Produtividade Mensal</b>", template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    return fig
 
-    contagem_diaria_semana = df_para_grafico.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Dia da Semana', 'Nome Dia Semana']).size().reset_index(name='Contagem')
-    contagem_diaria_semana['Filtro'] = contagem_diaria_semana['Mes_Ano_Abrev'] + " / Semana " + contagem_diaria_semana['Semana do Mês'].astype(str)
-    agregado_todos_dias_semana = contagem_diaria_semana.groupby(['Dia da Semana', 'Nome Dia Semana'])['Contagem'].sum().reset_index()
-
-    # --- Função interna para criar figuras individuais com menus ---
+def criar_grafico_principal(df):
+    if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
+    
+    # Função interna para criar figuras com menus
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None):
         figura = go.Figure()
         figura.add_trace(go.Scatter(x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado, mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center'))
@@ -102,18 +121,27 @@ def criar_painel_plotly(df_para_grafico):
         figura.update_traces(textfont=dict(size=10, color='#444'))
         return figura
 
-    # --- Criação das 3 figuras base ---
-    fig = criar_figura_com_menu(contagem_diaria, agregado_todos_dias, 'Dia', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Dia do Mês</b>', 'Dia do Mês', 'Qtd. Atividades')
-    fig_semana = criar_figura_com_menu(contagem_semanal, agregado_todas_semanas, 'Semana do Mês', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Semana do Mês</b>', 'Semana do Mês', 'Qtd. Atividades', xaxis_extra=dict(type='category'))
-    fig_dia_semana = criar_figura_com_menu(contagem_diaria_semana, agregado_todos_dias_semana, 'Nome Dia Semana', 'Filtro', 'Total Agregado', '<b>Contagem por Dia da Semana</b>', 'Dia da Semana', 'Qtd. Atividades', xaxis_extra=dict(categoryorder='array', categoryarray=['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']))
+    # Preparação de dados para cada sub-gráfico
+    contagem_diaria = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']).size().reset_index(name='Contagem')
+    agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index()
+    fig_dia = criar_figura_com_menu(contagem_diaria, agregado_todos_dias, 'Dia', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Dia do Mês</b>', 'Dia do Mês', 'Qtd. Atividades')
 
-    # --- Montagem da Figura Mestra ---
+    contagem_semanal = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']).size().reset_index(name='Contagem')
+    agregado_todas_semanas = contagem_semanal.groupby('Semana do Mês')['Contagem'].sum().reset_index()
+    fig_semana = criar_figura_com_menu(contagem_semanal, agregado_todas_semanas, 'Semana do Mês', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Semana do Mês</b>', 'Semana do Mês', 'Qtd. Atividades', xaxis_extra=dict(type='category'))
+
+    contagem_diaria_semana = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Dia da Semana', 'Nome Dia Semana']).size().reset_index(name='Contagem')
+    contagem_diaria_semana['Filtro'] = contagem_diaria_semana['Mes_Ano_Abrev'] + " / Semana " + contagem_diaria_semana['Semana do Mês'].astype(str)
+    agregado_todos_dias_semana = contagem_diaria_semana.groupby(['Dia da Semana', 'Nome Dia Semana'])['Contagem'].sum().reset_index()
+    fig_dia_semana = criar_figura_com_menu(contagem_diaria_semana, agregado_todos_dias_semana, 'Nome Dia Semana', 'Filtro', 'Total Agregado', '<b>Contagem por Dia da Semana</b>', 'Dia da Semana', 'Qtd. Atividades', xaxis_extra=dict(categoryorder='array', categoryarray=['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']))
+    
+    # Montagem da Figura Mestra
     fig_master = go.Figure()
-    for trace in fig.data: fig_master.add_trace(trace)
+    for trace in fig_dia.data: fig_master.add_trace(trace)
     for trace in fig_semana.data: fig_master.add_trace(trace)
     for trace in fig_dia_semana.data: fig_master.add_trace(trace)
 
-    num_traces_fig, num_traces_fig_semana, num_traces_fig_dia_semana = len(fig.data), len(fig_semana.data), len(fig_dia_semana.data)
+    num_traces_fig, num_traces_fig_semana, num_traces_fig_dia_semana = len(fig_dia.data), len(fig_semana.data), len(fig_dia_semana.data)
     num_total_traces = num_traces_fig + num_traces_fig_semana + num_traces_fig_dia_semana
 
     def criar_menu_corrigido(fig_original, offset, num_total_traces):
@@ -126,9 +154,9 @@ def criar_painel_plotly(df_para_grafico):
             botoes_corrigidos.append(dict(label=botao['label'], method='update', args=[{'visible': visibilidade_longa}]))
         return [dict(active=0, buttons=botoes_corrigidos, direction="down", pad={"r": 10, "t": 10}, showactive=True, x=0.01, xanchor="left", y=1.15, yanchor="top")]
 
-    updatemenus_fig, updatemenus_fig_semana, updatemenus_fig_dia_semana = criar_menu_corrigido(fig, 0, num_total_traces), criar_menu_corrigido(fig_semana, num_traces_fig, num_total_traces), criar_menu_corrigido(fig_dia_semana, num_traces_fig + num_traces_fig_semana, num_total_traces)
+    updatemenus_fig, updatemenus_fig_semana, updatemenus_fig_dia_semana = criar_menu_corrigido(fig_dia, 0, num_total_traces), criar_menu_corrigido(fig_semana, num_traces_fig, num_total_traces), criar_menu_corrigido(fig_dia_semana, num_traces_fig + num_traces_fig_semana, num_total_traces)
     
-    args1 = [{"visible": [i == 0 for i in range(num_total_traces)]}, {"title": fig.layout.title, "xaxis": fig.layout.xaxis, "yaxis": fig.layout.yaxis, "updatemenus": updatemenus_fig}]
+    args1 = [{"visible": [i == 0 for i in range(num_total_traces)]}, {"title": fig_dia.layout.title, "xaxis": fig_dia.layout.xaxis, "yaxis": fig_dia.layout.yaxis, "updatemenus": updatemenus_fig}]
     args2 = [{"visible": [i == num_traces_fig for i in range(num_total_traces)]}, {"title": fig_semana.layout.title, "xaxis": fig_semana.layout.xaxis, "yaxis": fig_semana.layout.yaxis, "updatemenus": updatemenus_fig_semana}]
     args3 = [{"visible": [i == (num_traces_fig + num_traces_fig_semana) for i in range(num_total_traces)]}, {"title": fig_dia_semana.layout.title, "xaxis": fig_dia_semana.layout.xaxis, "yaxis": fig_dia_semana.layout.yaxis, "updatemenus": updatemenus_fig_dia_semana}]
 
@@ -144,32 +172,184 @@ def criar_painel_plotly(df_para_grafico):
     
     return fig_master
 
-# ==============================================================================
-# PASSO 4: MONTAGEM DA INTERFACE DO STREAMLIT (A "VITRINE")
-# ==============================================================================
-st.set_page_config(layout="wide", page_title="Dashboard de Tarefas")
-st.title("📊 Dashboard Interativo de Tarefas")
+def criar_grafico_status_tarefas(df):
+    if df.empty: return go.Figure()
+    df_status = df['Status_Tarefa'].value_counts().reset_index()
+    df_status.columns = ['Status_Tarefa', 'Contagem']
+    fig = px.pie(df_status, names='Status_Tarefa', values='Contagem', title='<b>Distribuição por Status</b>', hole=0.4, color_discrete_map={'Executado': 'royalblue', 'Aberto': 'firebrick'})
+    fig.update_traces(textinfo='percent+label+value')
+    return fig
 
+def criar_grafico_tarefas_funcionarios(df):
+    if df.empty: return go.Figure()
+    df_funcionarios = df['Encarregado'].value_counts().reset_index()
+    df_funcionarios.columns = ['Encarregado', 'Contagem']
+    df_funcionarios = df_funcionarios.sort_values('Contagem', ascending=True)
+    fig = px.bar(df_funcionarios, x='Contagem', y='Encarregado', orientation='h', title="<b>N° de Tarefas por Funcionário</b>", text='Contagem', color='Contagem', color_continuous_scale='Blues')
+    fig.update_layout(template='plotly_white', yaxis_title=None, coloraxis_showscale=False)
+    return fig
+
+def criar_grafico_pontuacao(df):
+    if df.empty: return go.Figure().update_layout(title="<b>Pontuação</b>")
+
+    if 'Posição' not in df.columns:
+        return go.Figure().update_layout(title="<b>Pontuação (Coluna 'Posição' não encontrada)</b>")
+
+    lista_lideres = df[df['Posição'] == 'Lider']['Encarregado'].unique()
+    
+    df_peso_base = df.groupby('Encarregado')['Peso'].sum().reset_index()
+
+    pontos_lideranca = {}
+    for lider in lista_lideres:
+        for coluna in df.columns:
+            if coluna.upper() == lider.upper():
+                pontos_lideranca[lider] = pd.to_numeric(df[coluna], errors='coerce').sum()
+                break
+    df_pontos_lideranca = pd.DataFrame(list(pontos_lideranca.items()), columns=['Encarregado', 'Pontos_Lideranca'])
+
+    if df_pontos_lideranca.empty:
+        df_pontos_lideranca = pd.DataFrame(columns=['Encarregado', 'Pontos_Lideranca'])
+
+    df_agregado_final = pd.merge(df_peso_base, df_pontos_lideranca, on='Encarregado', how='left')
+    df_agregado_final['Pontos_Lideranca'].fillna(0, inplace=True)
+    df_agregado_final['Soma_Total'] = df_agregado_final['Peso'] + df_agregado_final['Pontos_Lideranca']
+
+    df_total_view = df_agregado_final.sort_values('Soma_Total', ascending=True)
+    df_funcionarios_view = df_agregado_final.sort_values('Peso', ascending=True)
+    df_lideranca_view = df_agregado_final[df_agregado_final['Pontos_Lideranca'] > 0].sort_values('Pontos_Lideranca', ascending=True)
+
+    fig = go.Figure(data=[
+        go.Bar(x=df_total_view['Soma_Total'], y=df_total_view['Encarregado'], orientation='h', text=df_total_view['Soma_Total'].astype(int), textposition='outside', name='Total'),
+        go.Bar(x=df_funcionarios_view['Peso'], y=df_funcionarios_view['Encarregado'], orientation='h', text=df_funcionarios_view['Peso'].astype(int), textposition='outside', name='Funcionários', visible=False),
+        go.Bar(x=df_lideranca_view['Pontos_Lideranca'], y=df_lideranca_view['Encarregado'], orientation='h', text=df_lideranca_view['Pontos_Lideranca'].astype(int), textposition='outside', name='Liderança', visible=False)
+    ])
+    
+    botoes_posicao = [
+        dict(label="Total", method="restyle", args=[{"visible": [True, False, False]}]),
+        dict(label="Funcionários", method="restyle", args=[{"visible": [False, True, False]}]),
+        dict(label="Liderança", method="restyle", args=[{"visible": [False, False, True]}]),
+    ]
+
+    fig.update_layout(
+        title_text="<b>Pontuação (Soma de Peso) por Funcionário</b>",
+        template='plotly_white', yaxis_title=None,
+        updatemenus=[dict(type="buttons", direction="right", active=0, x=1, xanchor="right", y=1.15, yanchor="top", buttons=botoes_posicao)]
+    )
+    return fig
+
+
+# ==============================================================================
+# CORPO PRINCIPAL DO DASHBOARD (INTERFACE STREAMLIT)
+# ==============================================================================
+st.title("Dashboard de Produtividade")
 df_analise = carregar_dados_completos()
 
-if df_analise is not None:
-    st.sidebar.header("Filtros")
-    encarregados_unicos = sorted(df_analise['Encarregado'].unique())
-    encarregado_selecionado = st.sidebar.multiselect("Encarregado:", options=encarregados_unicos, default=encarregados_unicos)
+if df_analise is not None and not df_analise.empty:
+
+    min_date = df_analise['Data Final (aberta)'].min().date()
+    max_date = df_analise['Data Final (aberta)'].max().date()
+
+    # --- CORREÇÃO: Lógica do Botão Limpar Filtros movida para uma função ---
+    def limpar_filtros():
+        st.session_state.encarregado_filtro = ["Todos"]
+        st.session_state.contrato_filtro = "Todos"
+        st.session_state.status_tarefa_filtro = "Todos"
+        st.session_state.semana_filtro = "Todos"
+        st.session_state.peso_filtro = "Todos"
+        st.session_state.date_slider = (min_date, max_date)
+
+    # Inicializa o estado da sessão na primeira execução
+    if 'filtros_iniciados' not in st.session_state:
+        limpar_filtros()
+        st.session_state.filtros_iniciados = True
+
+
+    # --- BARRA LATERAL COM FILTROS PRINCIPAIS ---
+    with st.sidebar:
+        st.image("media portal logo.png", width=200)
+        st.title("Filtros")
+        
+        encarregados_disponiveis = ["Todos"] + sorted(df_analise['Encarregado'].unique())
+        st.multiselect("Encarregado", encarregados_disponiveis, key='encarregado_filtro')
+
+        contratos_disponiveis = ["Todos"] + df_analise['Status_Funcionario'].unique().tolist()
+        st.selectbox("Contrato", contratos_disponiveis, key='contrato_filtro')
+
+        status_tarefas = ["Todos"] + df_analise['Status_Tarefa'].unique().tolist()
+        st.selectbox("Status da Tarefa", status_tarefas, key='status_tarefa_filtro')
+
+        st.markdown("---")
+        # O botão agora apenas chama a função de limpeza
+        st.button("Limpar Filtros 🗑️", on_click=limpar_filtros)
+
+    # --- APLICA OS FILTROS DA BARRA LATERAL ---
+    df_filtrado = df_analise.copy()
+    if "Todos" not in st.session_state.encarregado_filtro:
+        df_filtrado = df_filtrado[df_filtrado['Encarregado'].isin(st.session_state.encarregado_filtro)]
+    if st.session_state.contrato_filtro != "Todos":
+        df_filtrado = df_filtrado[df_filtrado['Status_Funcionario'] == st.session_state.contrato_filtro]
+    if st.session_state.status_tarefa_filtro != "Todos":
+        df_filtrado = df_filtrado[df_filtrado['Status_Tarefa'] == st.session_state.status_tarefa_filtro]
+        
+    # --- LINHA SUPERIOR: FILTROS SECUNDÁRIOS E KPIs ---
+    top_col1, top_col2, top_col3, top_col4, top_col5 = st.columns([2, 2, 1, 1, 4])
+
+    with top_col1:
+        semanas_disponiveis = ["Todos"] + sorted([i for i in df_filtrado['Semana do Mês'].unique() if i is not np.nan])
+        st.selectbox("Semana do Mês", semanas_disponiveis, key='semana_filtro')
     
-    status_unicos = df_analise['Status'].unique()
-    status_selecionado = st.sidebar.multiselect("Status da Tarefa:", options=status_unicos, default=status_unicos)
+    with top_col2:
+        pesos_disponiveis = ["Todos"] + sorted(df_filtrado['Peso'].astype(int).unique())
+        st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
 
-    # Aplica os filtros do Streamlit
-    df_filtrado = df_analise.query("Encarregado == @encarregado_selecionado & Status == @status_selecionado")
+    with top_col5:
+        st.slider(
+            "Intervalo de Datas (Data Final)",
+            min_value=min_date, max_value=max_date,
+            key='date_slider'
+        )
 
-    # Gera e exibe o painel de controle interativo
-    if not df_filtrado.empty:
-        painel_de_controle = criar_painel_plotly(df_filtrado)
-        st.plotly_chart(painel_de_controle, use_container_width=True)
-    else:
-        st.warning("Nenhum dado encontrado para os filtros selecionados.")
+    # Aplica os filtros da linha superior
+    if st.session_state.semana_filtro != "Todos":
+        df_filtrado = df_filtrado[df_filtrado['Semana do Mês'] == st.session_state.semana_filtro]
+    if st.session_state.peso_filtro != "Todos":
+        df_filtrado = df_filtrado[df_filtrado['Peso'] == st.session_state.peso_filtro]
+    
+    start_date, end_date = st.session_state.date_slider
+    df_filtrado = df_filtrado[
+        (df_filtrado['Data Final (aberta)'].dt.date >= start_date) &
+        (df_filtrado['Data Final (aberta)'].dt.date <= end_date)
+    ]
 
-    # Exibe a tabela de dados detalhados
-    st.markdown("### Dados Detalhados")
-    st.dataframe(df_filtrado)
+    with top_col3:
+        st.metric("Tarefas", f"{df_filtrado.shape[0]:,}")
+
+    with top_col4:
+        st.metric("Soma de Peso", f"{int(df_filtrado['Peso'].sum()):,}")
+        
+    st.markdown("---") 
+
+    # --- CORPO PRINCIPAL: GRÁFICOS ---
+    tab1, tab2 = st.tabs(["Visão Geral", "Análise de Equipe"])
+
+    with tab1:
+        fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado)
+        st.plotly_chart(fig_prod_mensal, use_container_width=True)
+        
+        fig_principal = criar_grafico_principal(df_filtrado)
+        st.plotly_chart(fig_principal, use_container_width=True)
+    
+    with tab2:
+        col_equipe1, col_equipe2 = st.columns(2)
+        with col_equipe1:
+            fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado)
+            st.plotly_chart(fig_tarefas, use_container_width=True)
+        with col_equipe2:
+            fig_pontuacao = criar_grafico_pontuacao(df_filtrado)
+            st.plotly_chart(fig_pontuacao, use_container_width=True)
+
+    fig_status = criar_grafico_status_tarefas(df_filtrado)
+    st.plotly_chart(fig_status, use_container_width=True)
+
+else:
+    st.error("Não foi possível carregar os dados para exibir o dashboard.")
