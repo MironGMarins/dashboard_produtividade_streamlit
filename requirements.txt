@@ -14,7 +14,8 @@ plotly
 gspread
 google-auth-httplib2
 oauth2client
-
+matplotlib-venn
+ipywidgets
 # Para a lógica de feriados na tabela calendário
 holidays
 
