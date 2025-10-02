@@ -87,22 +87,57 @@ def carregar_dados_completos():
 # FUNÇÕES PARA CRIAR OS GRÁFICOS
 # ==============================================================================
 def criar_grafico_produtividade_mensal(df):
-    if df.empty: return go.Figure()
+    if df.empty: return go.Figure().update_layout(title="<b>Produtividade Mensal</b>")
+    
     df_agregado = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev']).agg(
         contagem_tarefas=('ID', 'count'),
         soma_peso=('Peso', 'sum')
     ).reset_index().sort_values('Ano-Mês')
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=df_agregado['Mes_Ano_Abrev'], y=df_agregado['contagem_tarefas'], name='Quantidade de Tarefas', marker_color='royalblue'))
-    fig.add_trace(go.Scatter(x=df_agregado['Mes_Ano_Abrev'], y=df_agregado['soma_peso'], name='Soma de Peso', mode='lines+markers', line=dict(color='firebrick')))
-    fig.update_layout(title="<b>Produtividade Mensal</b>", template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    
+    # Adiciona as barras (sem texto)
+    fig.add_trace(go.Bar(
+        x=df_agregado['Mes_Ano_Abrev'], 
+        y=df_agregado['contagem_tarefas'], 
+        name='Quantidade de Tarefas', 
+        marker_color='royalblue'
+    ))
+    
+    # Adiciona a linha (sem texto)
+    fig.add_trace(go.Scatter(
+        x=df_agregado['Mes_Ano_Abrev'], 
+        y=df_agregado['soma_peso'], 
+        name='Soma de Peso', 
+        mode='lines+markers', 
+        line=dict(color='firebrick')
+    ))
+
+    # Cria as anotações customizadas
+    anotacoes = []
+    for index, row in df_agregado.iterrows():
+        # Anotação para a COLUNA (deslocada para a direita)
+        anotacoes.append(dict(x=row['Mes_Ano_Abrev'], y=row['contagem_tarefas'], text=str(row['contagem_tarefas']), showarrow=False, xshift=12, yshift=10, font=dict(color='royalblue')))
+        # Anotação para a LINHA (deslocada para a esquerda)
+        anotacoes.append(dict(x=row['Mes_Ano_Abrev'], y=row['soma_peso'], text=str(int(row['soma_peso'])), showarrow=False, xshift=-12, yshift=10, font=dict(color='firebrick')))
+
+    fig.update_layout(
+        title="<b>Produtividade Mensal</b>", 
+        template='plotly_white', 
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        annotations=anotacoes # Adiciona as anotações ao gráfico
+    )
+    
+    # Adiciona espaço no topo para os rótulos
+    if not df_agregado.empty:
+        max_y = df_agregado[['contagem_tarefas', 'soma_peso']].max().max()
+        fig.update_yaxes(range=[0, max_y * 1.2])
+
     return fig
 
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
     
-    # Função interna para criar figuras com menus
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None):
         figura = go.Figure()
         figura.add_trace(go.Scatter(x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado, mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center'))
@@ -113,15 +148,12 @@ def criar_grafico_principal(df):
                 figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False))
         botoes = [{'label': nome_agregado, 'method': 'update', 'args': [{'visible': [i == 0 for i in range(len(figura.data))]}]}]
         for i, trace in enumerate(figura.data[1:], 1):
-            visibilidade = [False] * len(figura.data)
-            visibilidade[i] = True
-            botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': visibilidade}]})
+            botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': [False] * i + [True] + [False] * (len(figura.data)-i-1)}]})
         figura.update_layout(updatemenus=[dict(active=0, buttons=botoes, direction="down", pad={"r": 10, "t": 10}, showactive=True, x=0.01, xanchor="left", y=1.15, yanchor="top")], title_text=titulo, xaxis_title=xaxis_titulo, yaxis_title=yaxis_titulo)
         if xaxis_extra: figura.update_layout(xaxis=xaxis_extra)
         figura.update_traces(textfont=dict(size=10, color='#444'))
         return figura
 
-    # Preparação de dados para cada sub-gráfico
     contagem_diaria = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']).size().reset_index(name='Contagem')
     agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index()
     fig_dia = criar_figura_com_menu(contagem_diaria, agregado_todos_dias, 'Dia', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Dia do Mês</b>', 'Dia do Mês', 'Qtd. Atividades')
@@ -135,7 +167,6 @@ def criar_grafico_principal(df):
     agregado_todos_dias_semana = contagem_diaria_semana.groupby(['Dia da Semana', 'Nome Dia Semana'])['Contagem'].sum().reset_index()
     fig_dia_semana = criar_figura_com_menu(contagem_diaria_semana, agregado_todos_dias_semana, 'Nome Dia Semana', 'Filtro', 'Total Agregado', '<b>Contagem por Dia da Semana</b>', 'Dia da Semana', 'Qtd. Atividades', xaxis_extra=dict(categoryorder='array', categoryarray=['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']))
     
-    # Montagem da Figura Mestra
     fig_master = go.Figure()
     for trace in fig_dia.data: fig_master.add_trace(trace)
     for trace in fig_semana.data: fig_master.add_trace(trace)
@@ -173,7 +204,7 @@ def criar_grafico_principal(df):
     return fig_master
 
 def criar_grafico_status_tarefas(df):
-    if df.empty: return go.Figure()
+    if df.empty: return go.Figure().update_layout(title="<b>Distribuição por Status</b>")
     df_status = df['Status_Tarefa'].value_counts().reset_index()
     df_status.columns = ['Status_Tarefa', 'Contagem']
     fig = px.pie(df_status, names='Status_Tarefa', values='Contagem', title='<b>Distribuição por Status</b>', hole=0.4, color_discrete_map={'Executado': 'royalblue', 'Aberto': 'firebrick'})
@@ -181,7 +212,7 @@ def criar_grafico_status_tarefas(df):
     return fig
 
 def criar_grafico_tarefas_funcionarios(df):
-    if df.empty: return go.Figure()
+    if df.empty: return go.Figure().update_layout(title="<b>N° de Tarefas por Funcionário</b>")
     df_funcionarios = df['Encarregado'].value_counts().reset_index()
     df_funcionarios.columns = ['Encarregado', 'Contagem']
     df_funcionarios = df_funcionarios.sort_values('Contagem', ascending=True)
@@ -249,7 +280,6 @@ if df_analise is not None and not df_analise.empty:
     min_date = df_analise['Data Final (aberta)'].min().date()
     max_date = df_analise['Data Final (aberta)'].max().date()
 
-    # --- CORREÇÃO: Lógica do Botão Limpar Filtros movida para uma função ---
     def limpar_filtros():
         st.session_state.encarregado_filtro = ["Todos"]
         st.session_state.contrato_filtro = "Todos"
@@ -258,13 +288,10 @@ if df_analise is not None and not df_analise.empty:
         st.session_state.peso_filtro = "Todos"
         st.session_state.date_slider = (min_date, max_date)
 
-    # Inicializa o estado da sessão na primeira execução
     if 'filtros_iniciados' not in st.session_state:
         limpar_filtros()
         st.session_state.filtros_iniciados = True
 
-
-    # --- BARRA LATERAL COM FILTROS PRINCIPAIS ---
     with st.sidebar:
         st.image("media portal logo.png", width=200)
         st.title("Filtros")
@@ -279,10 +306,8 @@ if df_analise is not None and not df_analise.empty:
         st.selectbox("Status da Tarefa", status_tarefas, key='status_tarefa_filtro')
 
         st.markdown("---")
-        # O botão agora apenas chama a função de limpeza
         st.button("Limpar Filtros 🗑️", on_click=limpar_filtros)
 
-    # --- APLICA OS FILTROS DA BARRA LATERAL ---
     df_filtrado = df_analise.copy()
     if "Todos" not in st.session_state.encarregado_filtro:
         df_filtrado = df_filtrado[df_filtrado['Encarregado'].isin(st.session_state.encarregado_filtro)]
@@ -291,7 +316,6 @@ if df_analise is not None and not df_analise.empty:
     if st.session_state.status_tarefa_filtro != "Todos":
         df_filtrado = df_filtrado[df_filtrado['Status_Tarefa'] == st.session_state.status_tarefa_filtro]
         
-    # --- LINHA SUPERIOR: FILTROS SECUNDÁRIOS E KPIs ---
     top_col1, top_col2, top_col3, top_col4, top_col5 = st.columns([2, 2, 1, 1, 4])
 
     with top_col1:
@@ -303,53 +327,49 @@ if df_analise is not None and not df_analise.empty:
         st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
 
     with top_col5:
-        st.slider(
-            "Intervalo de Datas (Data Final)",
-            min_value=min_date, max_value=max_date,
-            key='date_slider'
-        )
+        st.slider("Intervalo de Datas (Data Final)", min_value=min_date, max_value=max_date, key='date_slider')
 
-    # Aplica os filtros da linha superior
     if st.session_state.semana_filtro != "Todos":
         df_filtrado = df_filtrado[df_filtrado['Semana do Mês'] == st.session_state.semana_filtro]
     if st.session_state.peso_filtro != "Todos":
         df_filtrado = df_filtrado[df_filtrado['Peso'] == st.session_state.peso_filtro]
     
     start_date, end_date = st.session_state.date_slider
-    df_filtrado = df_filtrado[
-        (df_filtrado['Data Final (aberta)'].dt.date >= start_date) &
-        (df_filtrado['Data Final (aberta)'].dt.date <= end_date)
-    ]
+    df_filtrado = df_filtrado[(df_filtrado['Data Final (aberta)'].dt.date >= start_date) & (df_filtrado['Data Final (aberta)'].dt.date <= end_date)]
 
     with top_col3:
         st.metric("Tarefas", f"{df_filtrado.shape[0]:,}")
-
     with top_col4:
         st.metric("Soma de Peso", f"{int(df_filtrado['Peso'].sum()):,}")
         
     st.markdown("---") 
 
-    # --- CORPO PRINCIPAL: GRÁFICOS ---
-    tab1, tab2 = st.tabs(["Visão Geral", "Análise de Equipe"])
-
-    with tab1:
+    # --- CORPO PRINCIPAL: GRÁFICOS (SEM ABAS) ---
+    st.markdown("### Visão Geral")
+    col_geral1, col_geral2 = st.columns(2)
+    with col_geral1:
         fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado)
         st.plotly_chart(fig_prod_mensal, use_container_width=True)
-        
+    with col_geral2:
         fig_principal = criar_grafico_principal(df_filtrado)
         st.plotly_chart(fig_principal, use_container_width=True)
-    
-    with tab2:
-        col_equipe1, col_equipe2 = st.columns(2)
-        with col_equipe1:
-            fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado)
-            st.plotly_chart(fig_tarefas, use_container_width=True)
-        with col_equipe2:
-            fig_pontuacao = criar_grafico_pontuacao(df_filtrado)
-            st.plotly_chart(fig_pontuacao, use_container_width=True)
 
-    fig_status = criar_grafico_status_tarefas(df_filtrado)
-    st.plotly_chart(fig_status, use_container_width=True)
+    st.markdown("---")
+    st.markdown("### Análise de Equipe")
+    col_equipe1, col_equipe2 = st.columns(2)
+    with col_equipe1:
+        fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado)
+        st.plotly_chart(fig_tarefas, use_container_width=True)
+    with col_equipe2:
+        fig_pontuacao = criar_grafico_pontuacao(df_filtrado)
+        st.plotly_chart(fig_pontuacao, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("### Status Geral das Tarefas")
+    col_status1, col_status2, col_status3 = st.columns([1,2,1])
+    with col_status2:
+        fig_status = criar_grafico_status_tarefas(df_filtrado)
+        st.plotly_chart(fig_status, use_container_width=True)
 
 else:
     st.error("Não foi possível carregar os dados para exibir o dashboard.")
