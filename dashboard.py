@@ -138,20 +138,21 @@ def criar_grafico_produtividade_mensal(df):
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
     
-    # --- PASSO 1: Função auxiliar para criar as figuras base ---
+    # --- PASSO 1: Função auxiliar para criar as figuras base (sem mudanças) ---
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None):
         figura = go.Figure()
-        figura.add_trace(go.Scatter(x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado, mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center'))
         
-        # ==============================================================================
-        # ### CORREÇÃO FINAL AQUI: Ordenação inteligente do menu dropdown ###
-        # ==============================================================================
-        # Verifica se a coluna 'Semana do Mês' existe antes de tentar ordenar por ela.
+        custom_data_agregado = df_agregado['Nome Dia Semana'] if 'Nome Dia Semana' in df_agregado.columns else None
+        hover_template_agregado = '<b>%{customdata}</b><br>Dia: %{x}<br>Qtd: %{y}<extra></extra>' if custom_data_agregado is not None else 'Dia: %{x}<br>Qtd: %{y}<extra></extra>'
+        figura.add_trace(go.Scatter(
+            x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado,
+            mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center',
+            customdata=custom_data_agregado, hovertemplate=hover_template_agregado
+        ))
+
         if 'Semana do Mês' in df_contagem.columns:
-            # Se existir (caso do gráfico "Dia da Semana"), ordena por ano/mês E semana.
             opcoes_filtro = df_contagem.sort_values(['Ano-Mês', 'Semana do Mês'])[col_filtro].unique()
         else:
-            # Senão (casos de "Dia do Mês" e "Semana do Mês"), ordena apenas por ano/mês.
             opcoes_filtro = df_contagem.sort_values(['Ano-Mês'])[col_filtro].unique()
         
         for opcao in opcoes_filtro:
@@ -162,7 +163,13 @@ def criar_grafico_principal(df):
                 else:
                     df_filtrado = df_filtrado.sort_values(by=col_x)
 
-                figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False))
+                custom_data_filtrado = df_filtrado['Nome Dia Semana'] if 'Nome Dia Semana' in df_filtrado.columns else None
+                hover_template_filtrado = '<b>%{customdata}</b><br>Dia: %{x}<br>Qtd: %{y}<extra></extra>' if custom_data_filtrado is not None else 'Dia: %{x}<br>Qtd: %{y}<extra></extra>'
+                figura.add_trace(go.Scatter(
+                    x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao,
+                    mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False,
+                    customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado
+                ))
         
         botoes = [{'label': nome_agregado, 'method': 'update', 'args': [{'visible': [i == 0 for i in range(len(figura.data))]}]}]
         for i, trace in enumerate(figura.data[1:], 1):
@@ -175,11 +182,18 @@ def criar_grafico_principal(df):
         figura.update_traces(textfont=dict(size=10, color='#444'))
         return figura
 
-    # --- PASSO 2: Cria as 3 figuras base (sem mudanças aqui) ---
+    # --- PASSO 2: Cria as 3 figuras base ---
     contagem_diaria = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia', 'Nome Dia Semana']).size().reset_index(name='Contagem')
+    
+    # ==============================================================================
+    # ### A ÚNICA ALTERAÇÃO ESTÁ AQUI: Corrigido o groupby para a linha agregada ###
+    # ==============================================================================
+    # Agrupamos SOMENTE por 'Dia' para obter a soma total correta, ignorando o dia da semana.
     agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index().sort_values(by='Dia')
+    
     fig_dia = criar_figura_com_menu(contagem_diaria, agregado_todos_dias, 'Dia', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Dia do Mês</b>', None, None, xaxis_extra=dict(type='linear'))
 
+    # (O resto desta seção permanece igual)
     contagem_semanal = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']).size().reset_index(name='Contagem')
     agregado_todas_semanas = contagem_semanal.groupby('Semana do Mês')['Contagem'].sum().reset_index().sort_values(by='Semana do Mês')
     fig_semana = criar_figura_com_menu(contagem_semanal, agregado_todas_semanas, 'Semana do Mês', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Semana do Mês</b>', None, None, xaxis_extra=dict(type='linear'))
