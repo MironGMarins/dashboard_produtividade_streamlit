@@ -138,68 +138,105 @@ def criar_grafico_produtividade_mensal(df):
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
     
+    # --- PASSO 1: Função auxiliar para criar as figuras base ---
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None):
         figura = go.Figure()
         figura.add_trace(go.Scatter(x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado, mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center'))
-        opcoes_filtro = df_contagem.sort_values('Ano-Mês')[col_filtro].unique()
+        
+        # ==============================================================================
+        # ### CORREÇÃO FINAL AQUI: Ordenação inteligente do menu dropdown ###
+        # ==============================================================================
+        # Verifica se a coluna 'Semana do Mês' existe antes de tentar ordenar por ela.
+        if 'Semana do Mês' in df_contagem.columns:
+            # Se existir (caso do gráfico "Dia da Semana"), ordena por ano/mês E semana.
+            opcoes_filtro = df_contagem.sort_values(['Ano-Mês', 'Semana do Mês'])[col_filtro].unique()
+        else:
+            # Senão (casos de "Dia do Mês" e "Semana do Mês"), ordena apenas por ano/mês.
+            opcoes_filtro = df_contagem.sort_values(['Ano-Mês'])[col_filtro].unique()
+        
         for opcao in opcoes_filtro:
             df_filtrado = df_contagem[df_contagem[col_filtro] == opcao]
             if not df_filtrado.empty:
+                if col_x == 'Nome Dia Semana':
+                    df_filtrado = df_filtrado.sort_values(by='Dia da Semana')
+                else:
+                    df_filtrado = df_filtrado.sort_values(by=col_x)
+
                 figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False))
+        
         botoes = [{'label': nome_agregado, 'method': 'update', 'args': [{'visible': [i == 0 for i in range(len(figura.data))]}]}]
         for i, trace in enumerate(figura.data[1:], 1):
-            botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': [False] * i + [True] + [False] * (len(figura.data)-i-1)}]})
-        figura.update_layout(updatemenus=[dict(active=0, buttons=botoes, direction="down", pad={"r": 10, "t": 10}, showactive=True, x=0.01, xanchor="left", y=1.15, yanchor="top")], title_text=titulo, xaxis_title=xaxis_titulo, yaxis_title=yaxis_titulo)
+            visibilidade_args = [False] * len(figura.data); visibilidade_args[i] = True
+            botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': visibilidade_args}]})
+        
+        figura.update_layout(updatemenus=[dict(active=0, buttons=botoes, direction="down", showactive=True)], title_text=titulo, xaxis_title=xaxis_titulo, yaxis_title=yaxis_titulo)
+        
         if xaxis_extra: figura.update_layout(xaxis=xaxis_extra)
         figura.update_traces(textfont=dict(size=10, color='#444'))
         return figura
 
-    contagem_diaria = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']).size().reset_index(name='Contagem')
-    agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index()
-    fig_dia = criar_figura_com_menu(contagem_diaria, agregado_todos_dias, 'Dia', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Dia do Mês</b>', 'Dia do Mês', 'Qtd. Atividades')
+    # --- PASSO 2: Cria as 3 figuras base (sem mudanças aqui) ---
+    contagem_diaria = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia', 'Nome Dia Semana']).size().reset_index(name='Contagem')
+    agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index().sort_values(by='Dia')
+    fig_dia = criar_figura_com_menu(contagem_diaria, agregado_todos_dias, 'Dia', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Dia do Mês</b>', None, None, xaxis_extra=dict(type='linear'))
 
     contagem_semanal = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']).size().reset_index(name='Contagem')
-    agregado_todas_semanas = contagem_semanal.groupby('Semana do Mês')['Contagem'].sum().reset_index()
-    fig_semana = criar_figura_com_menu(contagem_semanal, agregado_todas_semanas, 'Semana do Mês', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Semana do Mês</b>', 'Semana do Mês', 'Qtd. Atividades', xaxis_extra=dict(type='category'))
+    agregado_todas_semanas = contagem_semanal.groupby('Semana do Mês')['Contagem'].sum().reset_index().sort_values(by='Semana do Mês')
+    fig_semana = criar_figura_com_menu(contagem_semanal, agregado_todas_semanas, 'Semana do Mês', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Semana do Mês</b>', None, None, xaxis_extra=dict(type='linear'))
 
     contagem_diaria_semana = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Dia da Semana', 'Nome Dia Semana']).size().reset_index(name='Contagem')
     contagem_diaria_semana['Filtro'] = contagem_diaria_semana['Mes_Ano_Abrev'] + " / Semana " + contagem_diaria_semana['Semana do Mês'].astype(str)
     agregado_todos_dias_semana = contagem_diaria_semana.groupby(['Dia da Semana', 'Nome Dia Semana'])['Contagem'].sum().reset_index()
-    fig_dia_semana = criar_figura_com_menu(contagem_diaria_semana, agregado_todos_dias_semana, 'Nome Dia Semana', 'Filtro', 'Total Agregado', '<b>Contagem por Dia da Semana</b>', 'Dia da Semana', 'Qtd. Atividades', xaxis_extra=dict(categoryorder='array', categoryarray=['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']))
+    fig_dia_semana = criar_figura_com_menu(contagem_diaria_semana, agregado_todos_dias_semana, 'Nome Dia Semana', 'Filtro', 'Total Agregado', '<b>Contagem por Dia da Semana</b>', None, None, xaxis_extra=dict(categoryorder='array', categoryarray=['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']))
     
+    # --- O RESTO DO CÓDIGO PERMANECE EXATAMENTE O MESMO ---
     fig_master = go.Figure()
     for trace in fig_dia.data: fig_master.add_trace(trace)
     for trace in fig_semana.data: fig_master.add_trace(trace)
     for trace in fig_dia_semana.data: fig_master.add_trace(trace)
 
-    num_traces_fig, num_traces_fig_semana, num_traces_fig_dia_semana = len(fig_dia.data), len(fig_semana.data), len(fig_dia_semana.data)
-    num_total_traces = num_traces_fig + num_traces_fig_semana + num_traces_fig_dia_semana
-
-    def criar_menu_corrigido(fig_original, offset, num_total_traces):
-        botoes_corrigidos = []
-        for botao in fig_original.layout.updatemenus[0].buttons:
-            visibilidade_curta = botao['args'][0]['visible']
-            visibilidade_longa = [False] * num_total_traces
-            for i, visivel in enumerate(visibilidade_curta):
-                if i + offset < num_total_traces: visibilidade_longa[i + offset] = visivel
-            botoes_corrigidos.append(dict(label=botao['label'], method='update', args=[{'visible': visibilidade_longa}]))
-        return [dict(active=0, buttons=botoes_corrigidos, direction="down", pad={"r": 10, "t": 10}, showactive=True, x=0.01, xanchor="left", y=1.15, yanchor="top")]
-
-    updatemenus_fig, updatemenus_fig_semana, updatemenus_fig_dia_semana = criar_menu_corrigido(fig_dia, 0, num_total_traces), criar_menu_corrigido(fig_semana, num_traces_fig, num_total_traces), criar_menu_corrigido(fig_dia_semana, num_traces_fig + num_traces_fig_semana, num_total_traces)
+    num_traces_fig_dia = len(fig_dia.data)
+    num_traces_fig_semana = len(fig_semana.data)
+    num_traces_fig_dia_semana = len(fig_dia_semana.data)
     
-    args1 = [{"visible": [i == 0 for i in range(num_total_traces)]}, {"title": fig_dia.layout.title, "xaxis": fig_dia.layout.xaxis, "yaxis": fig_dia.layout.yaxis, "updatemenus": updatemenus_fig}]
-    args2 = [{"visible": [i == num_traces_fig for i in range(num_total_traces)]}, {"title": fig_semana.layout.title, "xaxis": fig_semana.layout.xaxis, "yaxis": fig_semana.layout.yaxis, "updatemenus": updatemenus_fig_semana}]
-    args3 = [{"visible": [i == (num_traces_fig + num_traces_fig_semana) for i in range(num_total_traces)]}, {"title": fig_dia_semana.layout.title, "xaxis": fig_dia_semana.layout.xaxis, "yaxis": fig_dia_semana.layout.yaxis, "updatemenus": updatemenus_fig_dia_semana}]
+    def criar_argumentos_botao(fig_original, offset, active_button_index):
+        visibilidade_principal = [False] * len(fig_master.data); visibilidade_principal[offset] = True
+        novos_botoes_dropdown = []
+        botoes_originais = fig_original.layout.updatemenus[0].buttons
+        for i, botao_original in enumerate(botoes_originais):
+            nova_visibilidade_dropdown = [False] * len(fig_master.data)
+            if i == 0 and active_button_index in [0, 1]:
+                num_traces_grupo = num_traces_fig_dia if active_button_index == 0 else num_traces_fig_semana
+                for j in range(1, num_traces_grupo): nova_visibilidade_dropdown[j + offset] = True
+            elif i == 0 and active_button_index == 2:
+                for j in range(1, num_traces_fig_dia_semana): nova_visibilidade_dropdown[j + offset] = True
+            else:
+                indice_global_correto = i + offset; nova_visibilidade_dropdown[indice_global_correto] = True
+            novos_botoes_dropdown.append(dict(label=botao_original['label'], method='update', args=[{'visible': nova_visibilidade_dropdown}]))
+        layout_update = {
+            "title.text": fig_original.layout.title.text, "xaxis": fig_original.layout.xaxis, "yaxis": fig_original.layout.yaxis,
+            "updatemenus[1].buttons": novos_botoes_dropdown, "updatemenus[1].active": 0, "updatemenus[0].active": active_button_index
+        }
+        return [{"visible": visibilidade_principal}, layout_update]
 
+    args1 = criar_argumentos_botao(fig_dia, 0, 0)
+    args2 = criar_argumentos_botao(fig_semana, num_traces_fig_dia, 1)
+    args3 = criar_argumentos_botao(fig_dia_semana, num_traces_fig_dia + num_traces_fig_semana, 2)
+    
+    botoes_principais_config = dict(type="buttons", direction="right", x=0.99, xanchor="right", y=1.275, yanchor="top", buttons=[dict(label="Dia do Mês", method="update", args=args1), dict(label="Semana do Mês", method="update", args=args2), dict(label="Dia da Semana", method="update", args=args3)])
+    menu_suspenso_config = fig_dia.layout.updatemenus[0]
+    menu_suspenso_config.x = -0.01; menu_suspenso_config.xanchor = "left"; menu_suspenso_config.y = 1.275; menu_suspenso_config.yanchor = "top"
+    
     fig_master.update_layout(
-        updatemenus=[dict(type="buttons", direction="right", active=0, x=1, xanchor="right", y=1.2, yanchor="top", buttons=[
-            dict(label="Dia do Mês", method="update", args=args1),
-            dict(label="Semana do Mês", method="update", args=args2),
-            dict(label="Dia da Semana", method="update", args=args3)])])
-
-    fig_master.update_layout(title=args1[1]['title'], xaxis=args1[1]['xaxis'], yaxis=args1[1]['yaxis'], template='plotly_white')
+        template='plotly_white',
+        title=dict(text=fig_dia.layout.title.text, y=0.93, x=0.001, xanchor='left', yanchor='top'),
+        xaxis=args1[1]['xaxis'], yaxis=args1[1]['yaxis'],
+        margin=dict(t=130), 
+        updatemenus=[botoes_principais_config, menu_suspenso_config]
+    )
+    
     fig_master.update_traces(visible=False); fig_master.data[0].visible = True
-    fig_master.add_annotation(text="Selecione uma visualização:", xref="paper", yref="paper", x=0.99, y=1.15, xanchor="right", yanchor="bottom", showarrow=False, font=dict(size=14))
+    fig_master.add_annotation(text="Selecione uma visualização:", xref="paper", yref="paper", x=0.79, y=1.335, xanchor="right", yanchor="bottom", showarrow=False, font=dict(size=14))
     
     return fig_master
 
