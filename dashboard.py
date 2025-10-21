@@ -77,7 +77,6 @@ def carregar_dados_completos():
     data_fim = pd.Timestamp.now()
     tabela_calendario = pd.DataFrame({"Date": pd.date_range(start=data_inicio, end=data_fim, freq='D')})
     
-    # --- CORREÇÃO: Geração de nomes de mês e dia padronizados ---
     tabela_calendario['Ano'] = tabela_calendario['Date'].dt.year
     month_map = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
     tabela_calendario['Nome Mês'] = tabela_calendario['Date'].dt.month.map(month_map)
@@ -87,7 +86,9 @@ def carregar_dados_completos():
     tabela_calendario['Dia da Semana'] = tabela_calendario['Date'].dt.dayofweek # Mantém 0 para Segunda
     dias_map = {0: 'Seg', 1: 'Ter', 2: 'Qua', 3: 'Qui', 4: 'Sex', 5: 'Sab', 6: 'Dom'}
     tabela_calendario['Nome Dia Semana'] = tabela_calendario['Dia da Semana'].map(dias_map)
-    tabela_calendario['Semana do Mês'] = (tabela_calendario['Date'].dt.day - 1) // 7 + 1
+    
+    tabela_calendario['Week_Start_Date'] = tabela_calendario['Date'] - pd.to_timedelta(tabela_calendario['Date'].dt.dayofweek, unit='d')
+    tabela_calendario['Semana do Mês'] = tabela_calendario.groupby(tabela_calendario['Date'].dt.to_period('M'))['Week_Start_Date'].rank(method='dense').astype(int)
 
 
     df_analise_temp = pd.merge(df_grafico, tabela_calendario, how='left', left_on=pd.to_datetime(df_grafico['Data Final (aberta)'].dt.date), right_on=pd.to_datetime(tabela_calendario['Date'].dt.date)).drop(columns=['Date', 'key_0'])
@@ -133,11 +134,13 @@ def criar_grafico_produtividade_mensal(df):
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
 
-    # --- CORREÇÃO: Nova paleta de cores vibrantes e únicas ---
-    MONTH_COLORS = {
-        'Jan': '#1f77b4', 'Fev': '#2ca02c', 'Mar': '#ff7f0e', 'Abr': '#9467bd',
-        'Mai': '#d62728', 'Jun': '#17becf', 'Jul': '#32CD32', 'Ago': '#e377c2',
-        'Set': '#FFD700', 'Out': '#4B0082', 'Nov': '#008080', 'Dez': '#DC143C',
+    MONTH_COLORS_SCALES = {
+        'Jan': px.colors.sequential.Blues, 'Fev': px.colors.sequential.Greens,
+        'Mar': px.colors.sequential.Oranges, 'Abr': px.colors.sequential.Purples,
+        'Mai': px.colors.sequential.Reds, 'Jun': px.colors.sequential.Teal,
+        'Jul': px.colors.sequential.Mint, 'Ago': px.colors.sequential.YlOrBr, 
+        'Set': px.colors.sequential.Burg, 'Out': px.colors.sequential.Electric,
+        'Nov': px.colors.sequential.Cividis, 'Dez': px.colors.sequential.Magenta,
     }
     
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None, apply_custom_coloring=False):
@@ -165,18 +168,46 @@ def criar_grafico_principal(df):
                     try:
                         parts = opcao.replace('/', '').split()
                         mes_abrev = parts[0][:3]
-                        cor_do_mes = MONTH_COLORS.get(mes_abrev, 'gray')
-                        line_args['line'] = dict(color=cor_do_mes)
-                    except (IndexError, ValueError):
-                        pass
+                        semana_num = int(parts[-1])
+                        color_scale = MONTH_COLORS_SCALES.get(mes_abrev, px.colors.sequential.gray)
+                        color_index = int(((semana_num - 1) / 4.0) * (len(color_scale) - 1))
+                        color_index = max(2, min(len(color_scale) - 2, color_index)) 
+                        line_args['line'] = dict(color=color_scale[color_index])
+                    except (IndexError, ValueError): pass
 
                 figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False, customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado, **line_args))
         
-        botoes = [{'label': nome_agregado, 'method': 'update', 'args': [{'visible': [i == 0 for i in range(len(figura.data))]}]}]
-        for i, trace in enumerate(figura.data[1:], 1):
-            visibilidade_args = [False] * len(figura.data); visibilidade_args[i] = True
-            botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': visibilidade_args}]})
-        
+        # --- LÓGICA DE CRIAÇÃO DOS BOTÕES DO DROPDOWN ---
+        botoes = []
+        if apply_custom_coloring: # Lógica especial para "Dia da Semana"
+            # Botão 1: "Total Agregado" - mostra todas as linhas individuais juntas
+            vis_total_agregado = [False] * len(figura.data)
+            for i in range(1, len(figura.data)): vis_total_agregado[i] = True
+            botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': vis_total_agregado}]})
+
+            meses_unicos = df_contagem.sort_values('Ano-Mês')['Mes_Ano_Abrev'].unique()
+            trace_map = {trace.name: i for i, trace in enumerate(figura.data)}
+            
+            for mes in meses_unicos:
+                # Botão "Todas as Semanas" para o mês
+                vis_mes = [False] * len(figura.data)
+                semanas_do_mes = [opcao for opcao in opcoes_filtro if opcao.startswith(mes)]
+                for semana in semanas_do_mes:
+                    if semana in trace_map: vis_mes[trace_map[semana]] = True
+                botoes.append({'label': f"{mes} - Todas as Semanas", 'method': 'update', 'args': [{'visible': vis_mes}]})
+                
+                # Botões individuais para cada semana do mês
+                for semana in semanas_do_mes:
+                    if semana in trace_map:
+                        vis_individual = [False] * len(figura.data)
+                        vis_individual[trace_map[semana]] = True
+                        botoes.append({'label': semana, 'method': 'update', 'args': [{'visible': vis_individual}]})
+        else: # Lógica original para os outros gráficos
+            botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': [True] + [False]*(len(figura.data)-1)}]})
+            for i, trace in enumerate(figura.data[1:], 1):
+                visibilidade_args = [False] * len(figura.data); visibilidade_args[i] = True
+                botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': visibilidade_args}]})
+
         figura.update_layout(updatemenus=[dict(active=0, buttons=botoes, direction="down", showactive=True)], title_text=titulo, xaxis_title=xaxis_titulo, yaxis_title=yaxis_titulo)
         if xaxis_extra: figura.update_layout(xaxis=xaxis_extra)
         figura.update_traces(textfont=dict(size=10, color='#444'))
@@ -207,14 +238,15 @@ def criar_grafico_principal(df):
         visibilidade_principal = [False] * len(fig_master.data); visibilidade_principal[offset] = True
         novos_botoes_dropdown = []
         botoes_originais = fig_original.layout.updatemenus[0].buttons
-        for i, botao_original in enumerate(botoes_originais):
-            nova_visibilidade_dropdown = [False] * len(fig_master.data)
-            if i == 0 and active_button_index in [0, 1, 2]:
-                num_traces_grupo = len(fig_original.data)
-                for j in range(1, num_traces_grupo): nova_visibilidade_dropdown[j + offset] = True
-            else:
-                indice_global_correto = i + offset; nova_visibilidade_dropdown[indice_global_correto] = True
-            novos_botoes_dropdown.append(dict(label=botao_original['label'], method='update', args=[{'visible': nova_visibilidade_dropdown}]))
+        for botao_original in botoes_originais:
+            visibilidade_local = botao_original['args'][0]['visible']
+            visibilidade_global = [False] * len(fig_master.data)
+            for i_local, is_visible in enumerate(visibilidade_local):
+                if is_visible:
+                    i_global = i_local + offset
+                    if i_global < len(visibilidade_global):
+                        visibilidade_global[i_global] = True
+            novos_botoes_dropdown.append(dict(label=botao_original['label'], method='update', args=[{'visible': visibilidade_global}]))
         layout_update = {"title.text": fig_original.layout.title.text, "xaxis": fig_original.layout.xaxis, "yaxis": fig_original.layout.yaxis, "updatemenus[1].buttons": novos_botoes_dropdown, "updatemenus[1].active": 0, "updatemenus[0].active": active_button_index}
         return [{"visible": visibilidade_principal}, layout_update]
 
@@ -352,7 +384,6 @@ if df_analise is not None and not df_analise.empty:
         st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
 
     with top_col5:
-        # --- CORREÇÃO: Removido o argumento 'value' para evitar o warning ---
         st.slider("Intervalo de Datas (Data Final)", min_value=min_date, max_value=max_date, key='date_slider')
 
     if st.session_state.semana_filtro != "Todos":
@@ -370,7 +401,6 @@ if df_analise is not None and not df_analise.empty:
         
     st.markdown("---") 
 
-    # --- CORPO PRINCIPAL: GRÁFICOS (SEM ABAS) ---
     st.markdown("### Visão Geral")
     col_geral1, col_geral2 = st.columns(2)
     with col_geral1:
