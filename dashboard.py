@@ -9,7 +9,6 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 import holidays
-import json
 from datetime import date
 
 # ==============================================================================
@@ -33,12 +32,17 @@ def carregar_dados_completos():
     try:
         creds_json = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
-    except (FileNotFoundError, KeyError):
-        creds = Credentials.from_service_account_file("google_credentials.json", scopes=scopes)
+    except (KeyError, FileNotFoundError):
+        st.error("Credenciais do Google (gcp_service_account) não encontradas. Verifique seu arquivo .streamlit/secrets.toml.")
+        return None
     
     client = gspread.authorize(creds)
-    url_da_planilha = st.secrets.get("SHEET_URL", 'https://docs.google.com/spreadsheets/d/1juyOfIh0ZqsfJjN0p3gD8pKaAIX0R6IAPG9vysl7yWI/edit#gid=901870248')
     
+    url_da_planilha = st.secrets.get("SHEET_URL")
+    if not url_da_planilha:
+        st.error("URL da planilha (SHEET_URL) não encontrada no arquivo secrets.toml.")
+        return None
+        
     spreadsheet = client.open_by_url(url_da_planilha)
     
     # --- Carregamento das Abas ---
@@ -52,7 +56,13 @@ def carregar_dados_completos():
     
     # --- PREPARAÇÃO DOS DADOS ---
     df_grafico = df_dados.copy()
-    colunas_para_numerico = ['Peso', 'Pablo', 'Leonardo', 'Itiel', 'Ítalo']
+    
+    # Identifica líderes e colunas numéricas
+    encarregados = df_grafico['Encarregado'].astype(str).unique()
+    encarregados_lower = {str(e).lower() for e in encarregados}
+    lideres = [col for col in df_grafico.columns if str(col).lower() in encarregados_lower]
+    
+    colunas_para_numerico = ['Peso'] + lideres
     for col in colunas_para_numerico:
         if col in df_grafico.columns:
             df_grafico[col] = pd.to_numeric(df_grafico[col], errors='coerce').fillna(0)
@@ -66,19 +76,24 @@ def carregar_dados_completos():
     data_inicio = df_grafico['Data Inicial'].min() if pd.notna(df_grafico['Data Inicial'].min()) else pd.Timestamp.now()
     data_fim = pd.Timestamp.now()
     tabela_calendario = pd.DataFrame({"Date": pd.date_range(start=data_inicio, end=data_fim, freq='D')})
+    
+    # --- CORREÇÃO: Geração de nomes de mês e dia padronizados ---
     tabela_calendario['Ano'] = tabela_calendario['Date'].dt.year
-    tabela_calendario['Nome Mês'] = tabela_calendario['Date'].dt.strftime('%b').str.capitalize()
+    month_map = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+    tabela_calendario['Nome Mês'] = tabela_calendario['Date'].dt.month.map(month_map)
     tabela_calendario['Mes_Ano_Abrev'] = tabela_calendario['Nome Mês'] + '/' + tabela_calendario['Date'].dt.strftime('%y')
     tabela_calendario['Ano-Mês'] = tabela_calendario['Date'].dt.strftime('%Y-%m')
     tabela_calendario['Dia'] = tabela_calendario['Date'].dt.day
-    tabela_calendario['Dia da Semana'] = tabela_calendario['Date'].dt.dayofweek + 1
-    tabela_calendario['Nome Dia Semana'] = tabela_calendario['Date'].dt.dayofweek.map({0:'seg', 1:'ter', 2:'qua', 3:'qui', 4:'sex', 5:'sab', 6:'dom'})
-    tabela_calendario['Semana do Mês'] = (tabela_calendario['Date'].dt.dayofweek + (tabela_calendario['Date'].dt.day - 1)).floordiv(7) + 1
+    tabela_calendario['Dia da Semana'] = tabela_calendario['Date'].dt.dayofweek # Mantém 0 para Segunda
+    dias_map = {0: 'Seg', 1: 'Ter', 2: 'Qua', 3: 'Qui', 4: 'Sex', 5: 'Sab', 6: 'Dom'}
+    tabela_calendario['Nome Dia Semana'] = tabela_calendario['Dia da Semana'].map(dias_map)
+    tabela_calendario['Semana do Mês'] = (tabela_calendario['Date'].dt.day - 1) // 7 + 1
 
-    df_analise_temp = pd.merge(df_grafico, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date').drop(columns=['Date'])
+
+    df_analise_temp = pd.merge(df_grafico, tabela_calendario, how='left', left_on=pd.to_datetime(df_grafico['Data Final (aberta)'].dt.date), right_on=pd.to_datetime(tabela_calendario['Date'].dt.date)).drop(columns=['Date', 'key_0'])
     
-    df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
-    df_analise = pd.merge(df_analise_temp, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
+    df_equipe.rename(columns={'Status': 'Status_Funcionario', 'Nome': 'Encarregado'}, inplace=True)
+    df_analise = pd.merge(df_analise_temp, df_equipe, how='left', on='Encarregado')
     df_analise['Status_Funcionario'].fillna('Outros', inplace=True)
 
     return df_analise
@@ -95,40 +110,20 @@ def criar_grafico_produtividade_mensal(df):
     ).reset_index().sort_values('Ano-Mês')
 
     fig = go.Figure()
-    
-    # Adiciona as barras (sem texto)
-    fig.add_trace(go.Bar(
-        x=df_agregado['Mes_Ano_Abrev'], 
-        y=df_agregado['contagem_tarefas'], 
-        name='Quantidade de Tarefas', 
-        marker_color='royalblue'
-    ))
-    
-    # Adiciona a linha (sem texto)
-    fig.add_trace(go.Scatter(
-        x=df_agregado['Mes_Ano_Abrev'], 
-        y=df_agregado['soma_peso'], 
-        name='Soma de Peso', 
-        mode='lines+markers', 
-        line=dict(color='firebrick')
-    ))
+    fig.add_trace(go.Bar(x=df_agregado['Mes_Ano_Abrev'], y=df_agregado['contagem_tarefas'], name='Quantidade de Tarefas', marker_color='royalblue'))
+    fig.add_trace(go.Scatter(x=df_agregado['Mes_Ano_Abrev'], y=df_agregado['soma_peso'], name='Soma de Peso', mode='lines+markers', line=dict(color='firebrick')))
 
-    # Cria as anotações customizadas
     anotacoes = []
     for index, row in df_agregado.iterrows():
-        # Anotação para a COLUNA (deslocada para a direita)
         anotacoes.append(dict(x=row['Mes_Ano_Abrev'], y=row['contagem_tarefas'], text=str(row['contagem_tarefas']), showarrow=False, xshift=12, yshift=10, font=dict(color='royalblue')))
-        # Anotação para a LINHA (deslocada para a esquerda)
         anotacoes.append(dict(x=row['Mes_Ano_Abrev'], y=row['soma_peso'], text=str(int(row['soma_peso'])), showarrow=False, xshift=-12, yshift=10, font=dict(color='firebrick')))
 
     fig.update_layout(
-        title="<b>Produtividade Mensal</b>", 
-        template='plotly_white', 
+        title="<b>Produtividade Mensal</b>", template='plotly_white', 
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        annotations=anotacoes # Adiciona as anotações ao gráfico
+        annotations=anotacoes
     )
     
-    # Adiciona espaço no topo para os rótulos
     if not df_agregado.empty:
         max_y = df_agregado[['contagem_tarefas', 'soma_peso']].max().max()
         fig.update_yaxes(range=[0, max_y * 1.2])
@@ -137,18 +132,19 @@ def criar_grafico_produtividade_mensal(df):
 
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
+
+    # --- CORREÇÃO: Nova paleta de cores vibrantes e únicas ---
+    MONTH_COLORS = {
+        'Jan': '#1f77b4', 'Fev': '#2ca02c', 'Mar': '#ff7f0e', 'Abr': '#9467bd',
+        'Mai': '#d62728', 'Jun': '#17becf', 'Jul': '#32CD32', 'Ago': '#e377c2',
+        'Set': '#FFD700', 'Out': '#4B0082', 'Nov': '#008080', 'Dez': '#DC143C',
+    }
     
-    # --- PASSO 1: Função auxiliar para criar as figuras base (sem mudanças) ---
-    def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None):
+    def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None, apply_custom_coloring=False):
         figura = go.Figure()
         
-        custom_data_agregado = df_agregado['Nome Dia Semana'] if 'Nome Dia Semana' in df_agregado.columns else None
-        hover_template_agregado = '<b>%{customdata}</b><br>Dia: %{x}<br>Qtd: %{y}<extra></extra>' if custom_data_agregado is not None else 'Dia: %{x}<br>Qtd: %{y}<extra></extra>'
-        figura.add_trace(go.Scatter(
-            x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado,
-            mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center',
-            customdata=custom_data_agregado, hovertemplate=hover_template_agregado
-        ))
+        hover_template_agregado = 'Dia: %{x}<br>Qtd: %{y}<extra></extra>'
+        figura.add_trace(go.Scatter(x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado, mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center', hovertemplate=hover_template_agregado))
 
         if 'Semana do Mês' in df_contagem.columns:
             opcoes_filtro = df_contagem.sort_values(['Ano-Mês', 'Semana do Mês'])[col_filtro].unique()
@@ -158,18 +154,23 @@ def criar_grafico_principal(df):
         for opcao in opcoes_filtro:
             df_filtrado = df_contagem[df_contagem[col_filtro] == opcao]
             if not df_filtrado.empty:
-                if col_x == 'Nome Dia Semana':
-                    df_filtrado = df_filtrado.sort_values(by='Dia da Semana')
-                else:
-                    df_filtrado = df_filtrado.sort_values(by=col_x)
-
+                if col_x == 'Nome Dia Semana': df_filtrado = df_filtrado.sort_values(by='Dia da Semana')
+                else: df_filtrado = df_filtrado.sort_values(by=col_x)
+                
                 custom_data_filtrado = df_filtrado['Nome Dia Semana'] if 'Nome Dia Semana' in df_filtrado.columns else None
                 hover_template_filtrado = '<b>%{customdata}</b><br>Dia: %{x}<br>Qtd: %{y}<extra></extra>' if custom_data_filtrado is not None else 'Dia: %{x}<br>Qtd: %{y}<extra></extra>'
-                figura.add_trace(go.Scatter(
-                    x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao,
-                    mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False,
-                    customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado
-                ))
+                
+                line_args = {}
+                if apply_custom_coloring:
+                    try:
+                        parts = opcao.replace('/', '').split()
+                        mes_abrev = parts[0][:3]
+                        cor_do_mes = MONTH_COLORS.get(mes_abrev, 'gray')
+                        line_args['line'] = dict(color=cor_do_mes)
+                    except (IndexError, ValueError):
+                        pass
+
+                figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False, customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado, **line_args))
         
         botoes = [{'label': nome_agregado, 'method': 'update', 'args': [{'visible': [i == 0 for i in range(len(figura.data))]}]}]
         for i, trace in enumerate(figura.data[1:], 1):
@@ -177,23 +178,14 @@ def criar_grafico_principal(df):
             botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': visibilidade_args}]})
         
         figura.update_layout(updatemenus=[dict(active=0, buttons=botoes, direction="down", showactive=True)], title_text=titulo, xaxis_title=xaxis_titulo, yaxis_title=yaxis_titulo)
-        
         if xaxis_extra: figura.update_layout(xaxis=xaxis_extra)
         figura.update_traces(textfont=dict(size=10, color='#444'))
         return figura
 
-    # --- PASSO 2: Cria as 3 figuras base ---
     contagem_diaria = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia', 'Nome Dia Semana']).size().reset_index(name='Contagem')
-    
-    # ==============================================================================
-    # ### A ÚNICA ALTERAÇÃO ESTÁ AQUI: Corrigido o groupby para a linha agregada ###
-    # ==============================================================================
-    # Agrupamos SOMENTE por 'Dia' para obter a soma total correta, ignorando o dia da semana.
     agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index().sort_values(by='Dia')
-    
     fig_dia = criar_figura_com_menu(contagem_diaria, agregado_todos_dias, 'Dia', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Dia do Mês</b>', None, None, xaxis_extra=dict(type='linear'))
-
-    # (O resto desta seção permanece igual)
+    
     contagem_semanal = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']).size().reset_index(name='Contagem')
     agregado_todas_semanas = contagem_semanal.groupby('Semana do Mês')['Contagem'].sum().reset_index().sort_values(by='Semana do Mês')
     fig_semana = criar_figura_com_menu(contagem_semanal, agregado_todas_semanas, 'Semana do Mês', 'Mes_Ano_Abrev', 'Todos os Meses', '<b>Contagem por Semana do Mês</b>', None, None, xaxis_extra=dict(type='linear'))
@@ -201,9 +193,8 @@ def criar_grafico_principal(df):
     contagem_diaria_semana = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Dia da Semana', 'Nome Dia Semana']).size().reset_index(name='Contagem')
     contagem_diaria_semana['Filtro'] = contagem_diaria_semana['Mes_Ano_Abrev'] + " / Semana " + contagem_diaria_semana['Semana do Mês'].astype(str)
     agregado_todos_dias_semana = contagem_diaria_semana.groupby(['Dia da Semana', 'Nome Dia Semana'])['Contagem'].sum().reset_index()
-    fig_dia_semana = criar_figura_com_menu(contagem_diaria_semana, agregado_todos_dias_semana, 'Nome Dia Semana', 'Filtro', 'Total Agregado', '<b>Contagem por Dia da Semana</b>', None, None, xaxis_extra=dict(categoryorder='array', categoryarray=['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']))
+    fig_dia_semana = criar_figura_com_menu(contagem_diaria_semana, agregado_todos_dias_semana, 'Nome Dia Semana', 'Filtro', 'Total Agregado', '<b>Contagem por Dia da Semana</b>', None, None, xaxis_extra=dict(categoryorder='array', categoryarray=['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom']), apply_custom_coloring=True)
     
-    # --- O RESTO DO CÓDIGO PERMANECE EXATAMENTE O MESMO ---
     fig_master = go.Figure()
     for trace in fig_dia.data: fig_master.add_trace(trace)
     for trace in fig_semana.data: fig_master.add_trace(trace)
@@ -211,7 +202,6 @@ def criar_grafico_principal(df):
 
     num_traces_fig_dia = len(fig_dia.data)
     num_traces_fig_semana = len(fig_semana.data)
-    num_traces_fig_dia_semana = len(fig_dia_semana.data)
     
     def criar_argumentos_botao(fig_original, offset, active_button_index):
         visibilidade_principal = [False] * len(fig_master.data); visibilidade_principal[offset] = True
@@ -219,18 +209,13 @@ def criar_grafico_principal(df):
         botoes_originais = fig_original.layout.updatemenus[0].buttons
         for i, botao_original in enumerate(botoes_originais):
             nova_visibilidade_dropdown = [False] * len(fig_master.data)
-            if i == 0 and active_button_index in [0, 1]:
-                num_traces_grupo = num_traces_fig_dia if active_button_index == 0 else num_traces_fig_semana
+            if i == 0 and active_button_index in [0, 1, 2]:
+                num_traces_grupo = len(fig_original.data)
                 for j in range(1, num_traces_grupo): nova_visibilidade_dropdown[j + offset] = True
-            elif i == 0 and active_button_index == 2:
-                for j in range(1, num_traces_fig_dia_semana): nova_visibilidade_dropdown[j + offset] = True
             else:
                 indice_global_correto = i + offset; nova_visibilidade_dropdown[indice_global_correto] = True
             novos_botoes_dropdown.append(dict(label=botao_original['label'], method='update', args=[{'visible': nova_visibilidade_dropdown}]))
-        layout_update = {
-            "title.text": fig_original.layout.title.text, "xaxis": fig_original.layout.xaxis, "yaxis": fig_original.layout.yaxis,
-            "updatemenus[1].buttons": novos_botoes_dropdown, "updatemenus[1].active": 0, "updatemenus[0].active": active_button_index
-        }
+        layout_update = {"title.text": fig_original.layout.title.text, "xaxis": fig_original.layout.xaxis, "yaxis": fig_original.layout.yaxis, "updatemenus[1].buttons": novos_botoes_dropdown, "updatemenus[1].active": 0, "updatemenus[0].active": active_button_index}
         return [{"visible": visibilidade_principal}, layout_update]
 
     args1 = criar_argumentos_botao(fig_dia, 0, 0)
@@ -257,43 +242,33 @@ def criar_grafico_principal(df):
 def criar_grafico_status_tarefas(df):
     if df.empty: return go.Figure().update_layout(title="<b>Distribuição por Status</b>")
     df_status = df['Status_Tarefa'].value_counts().reset_index()
-    df_status.columns = ['Status_Tarefa', 'Contagem']
-    fig = px.pie(df_status, names='Status_Tarefa', values='Contagem', title='<b>Distribuição por Status</b>', hole=0.4, color_discrete_map={'Executado': 'royalblue', 'Aberto': 'firebrick'})
+    fig = px.pie(df_status, names='Status_Tarefa', values='count', title='<b>Distribuição por Status</b>', hole=0.4, color_discrete_map={'Executado': 'royalblue', 'Aberto': 'firebrick'})
     fig.update_traces(textinfo='percent+label+value')
     return fig
 
 def criar_grafico_tarefas_funcionarios(df):
     if df.empty: return go.Figure().update_layout(title="<b>N° de Tarefas por Funcionário</b>")
     df_funcionarios = df['Encarregado'].value_counts().reset_index()
-    df_funcionarios.columns = ['Encarregado', 'Contagem']
-    df_funcionarios = df_funcionarios.sort_values('Contagem', ascending=True)
-    fig = px.bar(df_funcionarios, x='Contagem', y='Encarregado', orientation='h', title="<b>N° de Tarefas por Funcionário</b>", text='Contagem', color='Contagem', color_continuous_scale='Blues')
+    df_funcionarios = df_funcionarios.sort_values('count', ascending=True)
+    fig = px.bar(df_funcionarios, x='count', y='Encarregado', orientation='h', title="<b>N° de Tarefas por Funcionário</b>", text_auto=True, color='count', color_continuous_scale='Blues')
     fig.update_layout(template='plotly_white', yaxis_title=None, coloraxis_showscale=False)
     return fig
 
 def criar_grafico_pontuacao(df):
-    if df.empty: return go.Figure().update_layout(title="<b>Pontuação</b>")
+    if df.empty or 'Posição' not in df.columns: return go.Figure().update_layout(title="<b>Pontuação</b>")
 
-    if 'Posição' not in df.columns:
-        return go.Figure().update_layout(title="<b>Pontuação (Coluna 'Posição' não encontrada)</b>")
-
-    lista_lideres = df[df['Posição'] == 'Lider']['Encarregado'].unique()
+    df_lideres_equipe = df[df['Posição'] == 'Lider']['Encarregado'].unique()
     
     df_peso_base = df.groupby('Encarregado')['Peso'].sum().reset_index()
 
     pontos_lideranca = {}
-    for lider in lista_lideres:
-        for coluna in df.columns:
-            if coluna.upper() == lider.upper():
-                pontos_lideranca[lider] = pd.to_numeric(df[coluna], errors='coerce').sum()
-                break
+    for lider in df_lideres_equipe:
+        lider_col_name = next((col for col in df.columns if col.lower() == lider.lower()), None)
+        if lider_col_name:
+            pontos_lideranca[lider] = pd.to_numeric(df[lider_col_name], errors='coerce').sum()
     df_pontos_lideranca = pd.DataFrame(list(pontos_lideranca.items()), columns=['Encarregado', 'Pontos_Lideranca'])
 
-    if df_pontos_lideranca.empty:
-        df_pontos_lideranca = pd.DataFrame(columns=['Encarregado', 'Pontos_Lideranca'])
-
-    df_agregado_final = pd.merge(df_peso_base, df_pontos_lideranca, on='Encarregado', how='left')
-    df_agregado_final['Pontos_Lideranca'].fillna(0, inplace=True)
+    df_agregado_final = pd.merge(df_peso_base, df_pontos_lideranca, on='Encarregado', how='left').fillna(0)
     df_agregado_final['Soma_Total'] = df_agregado_final['Peso'] + df_agregado_final['Pontos_Lideranca']
 
     df_total_view = df_agregado_final.sort_values('Soma_Total', ascending=True)
@@ -307,14 +282,13 @@ def criar_grafico_pontuacao(df):
     ])
     
     botoes_posicao = [
-        dict(label="Total", method="restyle", args=[{"visible": [True, False, False]}]),
-        dict(label="Funcionários", method="restyle", args=[{"visible": [False, True, False]}]),
-        dict(label="Liderança", method="restyle", args=[{"visible": [False, False, True]}]),
+        dict(label="Total", method="update", args=[{"visible": [True, False, False]}]),
+        dict(label="Funcionários", method="update", args=[{"visible": [False, True, False]}]),
+        dict(label="Liderança", method="update", args=[{"visible": [False, False, True]}]),
     ]
 
     fig.update_layout(
-        title_text="<b>Pontuação (Soma de Peso) por Funcionário</b>",
-        template='plotly_white', yaxis_title=None,
+        title_text="<b>Pontuação (Soma de Peso) por Funcionário</b>", template='plotly_white', yaxis_title=None,
         updatemenus=[dict(type="buttons", direction="right", active=0, x=1, xanchor="right", y=1.15, yanchor="top", buttons=botoes_posicao)]
     )
     return fig
@@ -370,14 +344,15 @@ if df_analise is not None and not df_analise.empty:
     top_col1, top_col2, top_col3, top_col4, top_col5 = st.columns([2, 2, 1, 1, 4])
 
     with top_col1:
-        semanas_disponiveis = ["Todos"] + sorted([i for i in df_filtrado['Semana do Mês'].unique() if i is not np.nan])
+        semanas_disponiveis = ["Todos"] + sorted([int(i) for i in df_filtrado['Semana do Mês'].unique() if pd.notna(i)])
         st.selectbox("Semana do Mês", semanas_disponiveis, key='semana_filtro')
     
     with top_col2:
-        pesos_disponiveis = ["Todos"] + sorted(df_filtrado['Peso'].astype(int).unique())
+        pesos_disponiveis = ["Todos"] + sorted([int(i) for i in df_filtrado['Peso'].unique() if pd.notna(i) and i > 0])
         st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
 
     with top_col5:
+        # --- CORREÇÃO: Removido o argumento 'value' para evitar o warning ---
         st.slider("Intervalo de Datas (Data Final)", min_value=min_date, max_value=max_date, key='date_slider')
 
     if st.session_state.semana_filtro != "Todos":
@@ -424,3 +399,4 @@ if df_analise is not None and not df_analise.empty:
 
 else:
     st.error("Não foi possível carregar os dados para exibir o dashboard.")
+
