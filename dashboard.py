@@ -134,13 +134,10 @@ def criar_grafico_produtividade_mensal(df):
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
 
-    MONTH_COLORS_SCALES = {
-        'Jan': px.colors.sequential.Blues, 'Fev': px.colors.sequential.Greens,
-        'Mar': px.colors.sequential.Oranges, 'Abr': px.colors.sequential.Purples,
-        'Mai': px.colors.sequential.Reds, 'Jun': px.colors.sequential.Teal,
-        'Jul': px.colors.sequential.Mint, 'Ago': px.colors.sequential.YlOrBr, 
-        'Set': px.colors.sequential.Burg, 'Out': px.colors.sequential.Electric,
-        'Nov': px.colors.sequential.Cividis, 'Dez': px.colors.sequential.Magenta,
+    MONTH_COLORS = {
+        'Jan': '#1f77b4', 'Fev': '#2ca02c', 'Mar': '#ff7f0e', 'Abr': '#9467bd',
+        'Mai': '#d62728', 'Jun': '#17becf', 'Jul': '#32CD32', 'Ago': '#e377c2',
+        'Set': '#FFD700', 'Out': '#4B0082', 'Nov': '#008080', 'Dez': '#DC143C',
     }
     
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None, apply_custom_coloring=False):
@@ -168,42 +165,39 @@ def criar_grafico_principal(df):
                     try:
                         parts = opcao.replace('/', '').split()
                         mes_abrev = parts[0][:3]
-                        semana_num = int(parts[-1])
-                        color_scale = MONTH_COLORS_SCALES.get(mes_abrev, px.colors.sequential.gray)
-                        color_index = int(((semana_num - 1) / 4.0) * (len(color_scale) - 1))
-                        color_index = max(2, min(len(color_scale) - 2, color_index)) 
-                        line_args['line'] = dict(color=color_scale[color_index])
-                    except (IndexError, ValueError): pass
+                        cor_do_mes = MONTH_COLORS.get(mes_abrev, 'gray')
+                        line_args['line'] = dict(color=cor_do_mes)
+                    except (IndexError, ValueError):
+                        pass
 
                 figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False, customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado, **line_args))
         
-        # --- LÓGICA DE CRIAÇÃO DOS BOTÕES DO DROPDOWN ---
         botoes = []
+        # --- LÓGICA DE BOTÕES CORRIGIDA ---
+        vis_total_agregado = [False] * len(figura.data)
+        for i in range(1, len(figura.data)): vis_total_agregado[i] = True
+            
         if apply_custom_coloring: # Lógica especial para "Dia da Semana"
-            # Botão 1: "Total Agregado" - mostra todas as linhas individuais juntas
-            vis_total_agregado = [False] * len(figura.data)
-            for i in range(1, len(figura.data)): vis_total_agregado[i] = True
             botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': vis_total_agregado}]})
 
             meses_unicos = df_contagem.sort_values('Ano-Mês')['Mes_Ano_Abrev'].unique()
             trace_map = {trace.name: i for i, trace in enumerate(figura.data)}
             
             for mes in meses_unicos:
-                # Botão "Todas as Semanas" para o mês
                 vis_mes = [False] * len(figura.data)
                 semanas_do_mes = [opcao for opcao in opcoes_filtro if opcao.startswith(mes)]
                 for semana in semanas_do_mes:
                     if semana in trace_map: vis_mes[trace_map[semana]] = True
                 botoes.append({'label': f"{mes} - Todas as Semanas", 'method': 'update', 'args': [{'visible': vis_mes}]})
                 
-                # Botões individuais para cada semana do mês
                 for semana in semanas_do_mes:
                     if semana in trace_map:
                         vis_individual = [False] * len(figura.data)
                         vis_individual[trace_map[semana]] = True
                         botoes.append({'label': semana, 'method': 'update', 'args': [{'visible': vis_individual}]})
-        else: # Lógica original para os outros gráficos
-            botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': [True] + [False]*(len(figura.data)-1)}]})
+        else: # Lógica para "Dia do Mês" e "Semana do Mês"
+            # CORREÇÃO: "Todos os Meses" agora mostra todas as linhas individuais
+            botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': vis_total_agregado}]})
             for i, trace in enumerate(figura.data[1:], 1):
                 visibilidade_args = [False] * len(figura.data); visibilidade_args[i] = True
                 botoes.append({'label': trace.name, 'method': 'update', 'args': [{'visible': visibilidade_args}]})
@@ -262,8 +256,15 @@ def criar_grafico_principal(df):
         template='plotly_white',
         title=dict(text=fig_dia.layout.title.text, y=0.93, x=0.001, xanchor='left', yanchor='top'),
         xaxis=args1[1]['xaxis'], yaxis=args1[1]['yaxis'],
-        margin=dict(t=130), 
-        updatemenus=[botoes_principais_config, menu_suspenso_config]
+        margin=dict(t=130, b=80), # Aumenta a margem inferior para dar espaço para a legenda
+        updatemenus=[botoes_principais_config, menu_suspenso_config],
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.2, # Posição abaixo do eixo X
+            xanchor="center",
+            x=0.5
+        )
     )
     
     fig_master.update_traces(visible=False); fig_master.data[0].visible = True
@@ -429,4 +430,3 @@ if df_analise is not None and not df_analise.empty:
 
 else:
     st.error("Não foi possível carregar os dados para exibir o dashboard.")
-
