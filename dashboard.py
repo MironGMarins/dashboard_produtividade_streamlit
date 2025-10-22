@@ -134,10 +134,20 @@ def criar_grafico_produtividade_mensal(df):
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
 
-    MONTH_COLORS = {
-        'Jan': '#1f77b4', 'Fev': '#2ca02c', 'Mar': '#ff7f0e', 'Abr': '#9467bd',
-        'Mai': '#d62728', 'Jun': '#17becf', 'Jul': '#32CD32', 'Ago': '#e377c2',
-        'Set': '#FFD700', 'Out': '#4B0082', 'Nov': '#008080', 'Dez': '#DC143C',
+    # --- PALETA DE CORES EM GRADIENTE REVISADA ---
+    MONTH_COLORS_SCALES = {
+        'Jan': px.colors.sequential.Blues, 
+        'Fev': px.colors.sequential.Greens,
+        'Mar': px.colors.sequential.Oranges, 
+        'Abr': px.colors.sequential.Purples,
+        'Mai': px.colors.sequential.Reds, 
+        'Jun': px.colors.sequential.Teal,
+        'Jul': px.colors.sequential.Mint,
+        'Ago': px.colors.sequential.YlOrBr, 
+        'Set': px.colors.sequential.Burg,
+        'Out': px.colors.sequential.Electric,
+        'Nov': px.colors.sequential.Cividis,
+        'Dez': px.colors.sequential.Magenta,
     }
     
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None, apply_custom_coloring=False):
@@ -165,8 +175,14 @@ def criar_grafico_principal(df):
                     try:
                         parts = opcao.replace('/', '').split()
                         mes_abrev = parts[0][:3]
-                        cor_do_mes = MONTH_COLORS.get(mes_abrev, 'gray')
-                        line_args['line'] = dict(color=cor_do_mes)
+                        semana_num = int(parts[-1])
+                        # Usa a paleta de gradiente
+                        color_scale = MONTH_COLORS_SCALES.get(mes_abrev, px.colors.sequential.gray)
+                        # Mapeia a semana (1-5) para um índice na escala de cores
+                        color_index = int(((semana_num - 1) / 4.0) * (len(color_scale) - 1))
+                        # Garante que o índice esteja dentro dos limites e evita as cores mais claras
+                        color_index = max(2, min(len(color_scale) - 2, color_index)) 
+                        line_args['line'] = dict(color=color_scale[color_index])
                     except (IndexError, ValueError):
                         pass
 
