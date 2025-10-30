@@ -20,6 +20,19 @@ st.set_page_config(
 )
 
 # ==============================================================================
+# FUNÇÃO AUXILIAR PARA NOMES
+# ==============================================================================
+def simplificar_nome(nome):
+    """Pega um nome completo e retorna 'PrimeiroNome UltimoNome'"""
+    if pd.isna(nome) or nome.strip() == "":
+        return "(Não atribuído)"
+    parts = str(nome).split()
+    if len(parts) == 1:
+        return parts[0]
+    else:
+        return f"{parts[0]} {parts[-1]}"
+
+# ==============================================================================
 # FUNÇÃO DE CARREGAMENTO DE DADOS (CACHE)
 # ==============================================================================
 @st.cache_data(ttl=600)
@@ -134,20 +147,10 @@ def criar_grafico_produtividade_mensal(df):
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
 
-    # --- PALETA DE CORES EM GRADIENTE REVISADA ---
-    MONTH_COLORS_SCALES = {
-        'Jan': px.colors.sequential.Blues, 
-        'Fev': px.colors.sequential.Greens,
-        'Mar': px.colors.sequential.Oranges, 
-        'Abr': px.colors.sequential.Purples,
-        'Mai': px.colors.sequential.Reds, 
-        'Jun': px.colors.sequential.Teal,
-        'Jul': px.colors.sequential.Mint,
-        'Ago': px.colors.sequential.YlOrBr, 
-        'Set': px.colors.sequential.Burg,
-        'Out': px.colors.sequential.Electric,
-        'Nov': px.colors.sequential.Cividis,
-        'Dez': px.colors.sequential.Magenta,
+    MONTH_COLORS = {
+        'Jan': '#1f77b4', 'Fev': '#2ca02c', 'Mar': '#ff7f0e', 'Abr': '#9467bd',
+        'Mai': '#d62728', 'Jun': '#17becf', 'Jul': '#32CD32', 'Ago': '#e377c2',
+        'Set': '#FFD700', 'Out': '#4B0082', 'Nov': '#008080', 'Dez': '#DC143C',
     }
     
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None, apply_custom_coloring=False):
@@ -175,25 +178,18 @@ def criar_grafico_principal(df):
                     try:
                         parts = opcao.replace('/', '').split()
                         mes_abrev = parts[0][:3]
-                        semana_num = int(parts[-1])
-                        # Usa a paleta de gradiente
-                        color_scale = MONTH_COLORS_SCALES.get(mes_abrev, px.colors.sequential.gray)
-                        # Mapeia a semana (1-5) para um índice na escala de cores
-                        color_index = int(((semana_num - 1) / 4.0) * (len(color_scale) - 1))
-                        # Garante que o índice esteja dentro dos limites e evita as cores mais claras
-                        color_index = max(2, min(len(color_scale) - 2, color_index)) 
-                        line_args['line'] = dict(color=color_scale[color_index])
+                        cor_do_mes = MONTH_COLORS.get(mes_abrev, 'gray')
+                        line_args['line'] = dict(color=cor_do_mes)
                     except (IndexError, ValueError):
                         pass
 
                 figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False, customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado, **line_args))
         
         botoes = []
-        # --- LÓGICA DE BOTÕES CORRIGIDA ---
         vis_total_agregado = [False] * len(figura.data)
         for i in range(1, len(figura.data)): vis_total_agregado[i] = True
             
-        if apply_custom_coloring: # Lógica especial para "Dia da Semana"
+        if apply_custom_coloring: 
             botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': vis_total_agregado}]})
 
             meses_unicos = df_contagem.sort_values('Ano-Mês')['Mes_Ano_Abrev'].unique()
@@ -211,8 +207,7 @@ def criar_grafico_principal(df):
                         vis_individual = [False] * len(figura.data)
                         vis_individual[trace_map[semana]] = True
                         botoes.append({'label': semana, 'method': 'update', 'args': [{'visible': vis_individual}]})
-        else: # Lógica para "Dia do Mês" e "Semana do Mês"
-            # CORREÇÃO: "Todos os Meses" agora mostra todas as linhas individuais
+        else: 
             botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': vis_total_agregado}]})
             for i, trace in enumerate(figura.data[1:], 1):
                 visibilidade_args = [False] * len(figura.data); visibilidade_args[i] = True
@@ -272,12 +267,12 @@ def criar_grafico_principal(df):
         template='plotly_white',
         title=dict(text=fig_dia.layout.title.text, y=0.93, x=0.001, xanchor='left', yanchor='top'),
         xaxis=args1[1]['xaxis'], yaxis=args1[1]['yaxis'],
-        margin=dict(t=130, b=80), # Aumenta a margem inferior para dar espaço para a legenda
+        margin=dict(t=130, b=80), 
         updatemenus=[botoes_principais_config, menu_suspenso_config],
         legend=dict(
             orientation="h",
             yanchor="top",
-            y=-0.2, # Posição abaixo do eixo X
+            y=-0.2, 
             xanchor="center",
             x=0.5
         )
@@ -297,10 +292,20 @@ def criar_grafico_status_tarefas(df):
 
 def criar_grafico_tarefas_funcionarios(df):
     if df.empty: return go.Figure().update_layout(title="<b>N° de Tarefas por Funcionário</b>")
+    
     df_funcionarios = df['Encarregado'].value_counts().reset_index()
     df_funcionarios = df_funcionarios.sort_values('count', ascending=True)
-    fig = px.bar(df_funcionarios, x='count', y='Encarregado', orientation='h', title="<b>N° de Tarefas por Funcionário</b>", text_auto=True, color='count', color_continuous_scale='Blues')
+    # --- ALTERAÇÃO AQUI: Cria a coluna com nome simplificado para o eixo Y ---
+    df_funcionarios['Encarregado_Simplificado'] = df_funcionarios['Encarregado'].apply(simplificar_nome)
+    
+    fig = px.bar(df_funcionarios, x='count', y='Encarregado_Simplificado', orientation='h', 
+                 title="<b>N° de Tarefas por Funcionário</b>", text_auto=True, 
+                 color='count', color_continuous_scale='Blues',
+                 custom_data=['Encarregado']) # Adiciona o nome completo aos dados do hover
+    
     fig.update_layout(template='plotly_white', yaxis_title=None, coloraxis_showscale=False)
+    # --- ALTERAÇÃO AQUI: Atualiza o hover para mostrar o nome completo ---
+    fig.update_traces(hovertemplate='<b>%{custom_data[0]}</b><br>Contagem: %{x}<extra></extra>')
     return fig
 
 def criar_grafico_pontuacao(df):
@@ -319,15 +324,19 @@ def criar_grafico_pontuacao(df):
 
     df_agregado_final = pd.merge(df_peso_base, df_pontos_lideranca, on='Encarregado', how='left').fillna(0)
     df_agregado_final['Soma_Total'] = df_agregado_final['Peso'] + df_agregado_final['Pontos_Lideranca']
+    
+    # --- ALTERAÇÃO AQUI: Cria a coluna com nome simplificado ---
+    df_agregado_final['Encarregado_Simplificado'] = df_agregado_final['Encarregado'].apply(simplificar_nome)
 
     df_total_view = df_agregado_final.sort_values('Soma_Total', ascending=True)
     df_funcionarios_view = df_agregado_final.sort_values('Peso', ascending=True)
     df_lideranca_view = df_agregado_final[df_agregado_final['Pontos_Lideranca'] > 0].sort_values('Pontos_Lideranca', ascending=True)
 
+    # --- ALTERAÇÃO AQUI: Usa a coluna simplificada no eixo Y e a original no customdata ---
     fig = go.Figure(data=[
-        go.Bar(x=df_total_view['Soma_Total'], y=df_total_view['Encarregado'], orientation='h', text=df_total_view['Soma_Total'].astype(int), textposition='outside', name='Total'),
-        go.Bar(x=df_funcionarios_view['Peso'], y=df_funcionarios_view['Encarregado'], orientation='h', text=df_funcionarios_view['Peso'].astype(int), textposition='outside', name='Funcionários', visible=False),
-        go.Bar(x=df_lideranca_view['Pontos_Lideranca'], y=df_lideranca_view['Encarregado'], orientation='h', text=df_lideranca_view['Pontos_Lideranca'].astype(int), textposition='outside', name='Liderança', visible=False)
+        go.Bar(x=df_total_view['Soma_Total'], y=df_total_view['Encarregado_Simplificado'], orientation='h', text=df_total_view['Soma_Total'].astype(int), textposition='outside', name='Total', customdata=df_total_view['Encarregado']),
+        go.Bar(x=df_funcionarios_view['Peso'], y=df_funcionarios_view['Encarregado_Simplificado'], orientation='h', text=df_funcionarios_view['Peso'].astype(int), textposition='outside', name='Funcionários', visible=False, customdata=df_funcionarios_view['Encarregado']),
+        go.Bar(x=df_lideranca_view['Pontos_Lideranca'], y=df_lideranca_view['Encarregado_Simplificado'], orientation='h', text=df_lideranca_view['Pontos_Lideranca'].astype(int), textposition='outside', name='Liderança', visible=False, customdata=df_lideranca_view['Encarregado'])
     ])
     
     botoes_posicao = [
@@ -340,6 +349,8 @@ def criar_grafico_pontuacao(df):
         title_text="<b>Pontuação (Soma de Peso) por Funcionário</b>", template='plotly_white', yaxis_title=None,
         updatemenus=[dict(type="buttons", direction="right", active=0, x=1, xanchor="right", y=1.15, yanchor="top", buttons=botoes_posicao)]
     )
+    # --- ALTERAÇÃO AQUI: Atualiza o hover para mostrar o nome completo ---
+    fig.update_traces(hovertemplate='<b>%{customdata}</b><br>Pontuação: %{x}<extra></extra>')
     return fig
 
 
