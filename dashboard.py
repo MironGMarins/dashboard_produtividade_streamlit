@@ -64,9 +64,28 @@ def carregar_dados_completos():
     worksheet_dados = spreadsheet.worksheet(nome_aba_dados)
     worksheet_equipe = spreadsheet.worksheet(nome_aba_equipes)
 
-    df_dados = pd.DataFrame(worksheet_dados.get_all_records())
-    df_equipe = pd.DataFrame(worksheet_equipe.get_all_records())
+    # *** MUDANÇA 1: Usar get_all_values() para importação bruta ***
+    # (Substitui get_all_records() para ler tudo como string)
+    try:
+        dados_planilha = worksheet_dados.get_all_values()
+        if len(dados_planilha) < 1:
+            st.error(f"A aba '{nome_aba_dados}' está vazia.")
+            return None
+        df_dados = pd.DataFrame(dados_planilha[1:], columns=dados_planilha[0])
+
+        equipe_planilha = worksheet_equipe.get_all_values()
+        if len(equipe_planilha) < 1:
+             st.error(f"A aba '{nome_aba_equipes}' está vazia.")
+             return None
+        df_equipe = pd.DataFrame(equipe_planilha[1:], columns=equipe_planilha[0])
     
+    except gspread.exceptions.WorksheetNotFound as e:
+        st.error(f"Erro Crítico: Aba não encontrada: {e}")
+        return None
+    except Exception as e:
+        st.error(f"Erro ao ler os dados das abas: {e}")
+        return None
+        
     # --- PREPARAÇÃO DOS DADOS ---
     df_grafico = df_dados.copy()
     
@@ -75,13 +94,29 @@ def carregar_dados_completos():
     encarregados_lower = {str(e).lower() for e in encarregados}
     lideres = [col for col in df_grafico.columns if str(col).lower() in encarregados_lower]
     
+    # *** MUDANÇA 2: Conversão numérica robusta (tratando vírgulas e vazios) ***
     colunas_para_numerico = ['Peso'] + lideres
     for col in colunas_para_numerico:
         if col in df_grafico.columns:
+            # Substitui vírgula por ponto (para decimais ex: 1,5 -> 1.5)
+            df_grafico[col] = df_grafico[col].astype(str).str.replace(',', '.', regex=False)
+            # Substitui vazios ('', 'None') por Nulo
+            df_grafico[col] = df_grafico[col].replace(['', 'None', None, 'nan'], pd.NA)
+            # Converte para numérico
             df_grafico[col] = pd.to_numeric(df_grafico[col], errors='coerce').fillna(0)
 
-    df_grafico['Data Inicial'] = pd.to_datetime(df_grafico['Data Inicial'], errors='coerce')
-    df_grafico['Data Final'] = pd.to_datetime(df_grafico['Data Final'], errors='coerce')
+    # *** MUDANÇA 3: Conversão de data robusta (tratando vazios e formato PT-BR) ***
+    colunas_data = ['Data Inicial', 'Data Final'] # Adicione 'Data Estipulada' se o dashboard usar
+    for col in colunas_data:
+        if col in df_grafico.columns:
+            # Substitui vazios ('', 'None') por Nulo
+            df_grafico[col] = df_grafico[col].replace(['', 'None', None, 'nan'], pd.NA)
+            # Converte para datetime, assumindo que o dia vem primeiro (ex: 31/12/2025)
+            df_grafico[col] = pd.to_datetime(df_grafico[col], dayfirst=True, errors='coerce')
+        else:
+            st.warning(f"Coluna '{col}' não encontrada, criando-a como vazia.")
+            df_grafico[col] = pd.NaT # Cria coluna vazia para evitar erros
+
     df_grafico['Status_Tarefa'] = np.where(df_grafico['Data Final'].isnull(), 'Aberto', 'Executado')
     data_hoje = pd.Timestamp.now().normalize()
     df_grafico['Data Final (aberta)'] = df_grafico['Data Final'].fillna(data_hoje)
@@ -103,8 +138,11 @@ def carregar_dados_completos():
     tabela_calendario['Week_Start_Date'] = tabela_calendario['Date'] - pd.to_timedelta(tabela_calendario['Date'].dt.dayofweek, unit='d')
     tabela_calendario['Semana do Mês'] = tabela_calendario.groupby(tabela_calendario['Date'].dt.to_period('M'))['Week_Start_Date'].rank(method='dense').astype(int)
 
+    # *** MUDANÇA 4: Merge mais limpo usando uma chave dedicada ***
+    df_grafico['Data_Merge'] = pd.to_datetime(df_grafico['Data Final (aberta)'].dt.date)
+    tabela_calendario['Data_Merge'] = pd.to_datetime(tabela_calendario['Date'].dt.date)
 
-    df_analise_temp = pd.merge(df_grafico, tabela_calendario, how='left', left_on=pd.to_datetime(df_grafico['Data Final (aberta)'].dt.date), right_on=pd.to_datetime(tabela_calendario['Date'].dt.date)).drop(columns=['Date', 'key_0'])
+    df_analise_temp = pd.merge(df_grafico, tabela_calendario, how='left', on='Data_Merge').drop(columns=['Date', 'Data_Merge'])
     
     df_equipe.rename(columns={'Status': 'Status_Funcionario', 'Nome': 'Encarregado'}, inplace=True)
     df_analise = pd.merge(df_analise_temp, df_equipe, how='left', on='Encarregado')
@@ -118,6 +156,11 @@ def carregar_dados_completos():
 def criar_grafico_produtividade_mensal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Produtividade Mensal</b>")
     
+    # Garante que as colunas existem e são do tipo correto antes de agrupar
+    if 'Ano-Mês' not in df.columns or 'Mes_Ano_Abrev' not in df.columns:
+        st.warning("Colunas 'Ano-Mês' ou 'Mes_Ano_Abrev' ausentes para gráfico de produtividade.")
+        return go.Figure().update_layout(title="<b>Produtividade Mensal (Erro)</b>")
+
     df_agregado = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev']).agg(
         contagem_tarefas=('ID', 'count'),
         soma_peso=('Peso', 'sum')
@@ -156,8 +199,16 @@ def criar_grafico_principal(df):
     def criar_figura_com_menu(df_contagem, df_agregado, col_x, col_filtro, nome_agregado, titulo, xaxis_titulo, yaxis_titulo, xaxis_extra=None, apply_custom_coloring=False):
         figura = go.Figure()
         
+        # Proteção: Se o agregado estiver vazio, apenas retorne o título
+        if df_agregado.empty or col_x not in df_agregado.columns:
+             return figura.update_layout(title_text=titulo)
+             
         hover_template_agregado = 'Dia: %{x}<br>Qtd: %{y}<extra></extra>'
         figura.add_trace(go.Scatter(x=df_agregado[col_x], y=df_agregado['Contagem'], name=nome_agregado, mode='lines+markers+text', text=df_agregado['Contagem'], textposition='top center', hovertemplate=hover_template_agregado))
+
+        # Proteção: Se a contagem detalhada estiver vazia, retorne só o agregado
+        if df_contagem.empty or col_filtro not in df_contagem.columns:
+            return figura.update_layout(title_text=titulo)
 
         if 'Semana do Mês' in df_contagem.columns:
             opcoes_filtro = df_contagem.sort_values(['Ano-Mês', 'Semana do Mês'])[col_filtro].unique()
@@ -176,14 +227,14 @@ def criar_grafico_principal(df):
                 line_args = {}
                 if apply_custom_coloring:
                     try:
-                        parts = opcao.replace('/', '').split()
+                        parts = str(opcao).replace('/', '').split()
                         mes_abrev = parts[0][:3]
                         cor_do_mes = MONTH_COLORS.get(mes_abrev, 'gray')
                         line_args['line'] = dict(color=cor_do_mes)
                     except (IndexError, ValueError):
                         pass
 
-                figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=opcao, mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False, customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado, **line_args))
+                figura.add_trace(go.Scatter(x=df_filtrado[col_x], y=df_filtrado['Contagem'], name=str(opcao), mode='lines+markers+text', text=df_filtrado['Contagem'], textposition='top center', visible=False, customdata=custom_data_filtrado, hovertemplate=hover_template_filtrado, **line_args))
         
         botoes = []
         vis_total_agregado = [False] * len(figura.data)
@@ -197,7 +248,7 @@ def criar_grafico_principal(df):
             
             for mes in meses_unicos:
                 vis_mes = [False] * len(figura.data)
-                semanas_do_mes = [opcao for opcao in opcoes_filtro if opcao.startswith(mes)]
+                semanas_do_mes = [opcao for opcao in opcoes_filtro if str(opcao).startswith(str(mes))]
                 for semana in semanas_do_mes:
                     if semana in trace_map: vis_mes[trace_map[semana]] = True
                 botoes.append({'label': f"{mes} - Todas as Semanas", 'method': 'update', 'args': [{'visible': vis_mes}]})
@@ -206,7 +257,7 @@ def criar_grafico_principal(df):
                     if semana in trace_map:
                         vis_individual = [False] * len(figura.data)
                         vis_individual[trace_map[semana]] = True
-                        botoes.append({'label': semana, 'method': 'update', 'args': [{'visible': vis_individual}]})
+                        botoes.append({'label': str(semana), 'method': 'update', 'args': [{'visible': vis_individual}]})
         else: 
             botoes.append({'label': nome_agregado, 'method': 'update', 'args': [{'visible': vis_total_agregado}]})
             for i, trace in enumerate(figura.data[1:], 1):
@@ -217,6 +268,12 @@ def criar_grafico_principal(df):
         if xaxis_extra: figura.update_layout(xaxis=xaxis_extra)
         figura.update_traces(textfont=dict(size=10, color='#444'))
         return figura
+
+    # Verifica se as colunas necessárias existem
+    cols_necessarias = ['Ano-Mês', 'Mes_Ano_Abrev', 'Dia', 'Nome Dia Semana', 'Semana do Mês', 'Dia da Semana']
+    if not all(col in df.columns for col in cols_necessarias):
+        st.warning("Faltam colunas de data na 'Tabela Calendário' para o Gráfico Principal.")
+        return go.Figure().update_layout(title="<b>Gráfico Principal (Erro)</b>")
 
     contagem_diaria = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia', 'Nome Dia Semana']).size().reset_index(name='Contagem')
     agregado_todos_dias = contagem_diaria.groupby('Dia')['Contagem'].sum().reset_index().sort_values(by='Dia')
@@ -240,7 +297,14 @@ def criar_grafico_principal(df):
     num_traces_fig_semana = len(fig_semana.data)
     
     def criar_argumentos_botao(fig_original, offset, active_button_index):
-        visibilidade_principal = [False] * len(fig_master.data); visibilidade_principal[offset] = True
+        # Proteção caso o fig_original não tenha layout/botões
+        if not hasattr(fig_original.layout, 'updatemenus') or not fig_original.layout.updatemenus:
+            return [{"visible": [False] * len(fig_master.data)}, {}]
+            
+        visibilidade_principal = [False] * len(fig_master.data); 
+        if offset < len(visibilidade_principal):
+            visibilidade_principal[offset] = True
+            
         novos_botoes_dropdown = []
         botoes_originais = fig_original.layout.updatemenus[0].buttons
         for botao_original in botoes_originais:
@@ -252,7 +316,15 @@ def criar_grafico_principal(df):
                     if i_global < len(visibilidade_global):
                         visibilidade_global[i_global] = True
             novos_botoes_dropdown.append(dict(label=botao_original['label'], method='update', args=[{'visible': visibilidade_global}]))
-        layout_update = {"title.text": fig_original.layout.title.text, "xaxis": fig_original.layout.xaxis, "yaxis": fig_original.layout.yaxis, "updatemenus[1].buttons": novos_botoes_dropdown, "updatemenus[1].active": 0, "updatemenus[0].active": active_button_index}
+        
+        layout_update = {
+            "title.text": fig_original.layout.title.text, 
+            "xaxis": fig_original.layout.xaxis, 
+            "yaxis": fig_original.layout.yaxis, 
+            "updatemenus[1].buttons": novos_botoes_dropdown, 
+            "updatemenus[1].active": 0, 
+            "updatemenus[0].active": active_button_index
+        }
         return [{"visible": visibilidade_principal}, layout_update]
 
     args1 = criar_argumentos_botao(fig_dia, 0, 0)
@@ -260,13 +332,28 @@ def criar_grafico_principal(df):
     args3 = criar_argumentos_botao(fig_dia_semana, num_traces_fig_dia + num_traces_fig_semana, 2)
     
     botoes_principais_config = dict(type="buttons", direction="right", x=0.99, xanchor="right", y=1.275, yanchor="top", buttons=[dict(label="Dia do Mês", method="update", args=args1), dict(label="Semana do Mês", method="update", args=args2), dict(label="Dia da Semana", method="update", args=args3)])
-    menu_suspenso_config = fig_dia.layout.updatemenus[0]
-    menu_suspenso_config.x = -0.01; menu_suspenso_config.xanchor = "left"; menu_suspenso_config.y = 1.275; menu_suspenso_config.yanchor = "top"
     
+    # --- CORREÇÃO DO ERRO ---
+    # Invertemos a lógica. Começamos com o menu do fig_dia (se existir)
+    # e DEPOIS atualizamos com as nossas coordenadas.
+    if hasattr(fig_dia.layout, 'updatemenus') and fig_dia.layout.updatemenus:
+        menu_suspenso_config = fig_dia.layout.updatemenus[0]
+    else:
+        menu_suspenso_config = dict() # Cria um dict vazio se não houver
+    
+    # Agora atualiza o menu com as coordenadas
+    menu_suspenso_config.update(
+        x=-0.01, 
+        xanchor="left", 
+        y=1.275, 
+        yanchor="top"
+    )
+    # --- FIM DA CORREÇÃO ---
+
     fig_master.update_layout(
         template='plotly_white',
         title=dict(text=fig_dia.layout.title.text, y=0.93, x=0.001, xanchor='left', yanchor='top'),
-        xaxis=args1[1]['xaxis'], yaxis=args1[1]['yaxis'],
+        xaxis=args1[1].get('xaxis'), yaxis=args1[1].get('yaxis'),
         margin=dict(t=130, b=80), 
         updatemenus=[botoes_principais_config, menu_suspenso_config],
         legend=dict(
@@ -278,7 +365,9 @@ def criar_grafico_principal(df):
         )
     )
     
-    fig_master.update_traces(visible=False); fig_master.data[0].visible = True
+    if fig_master.data: # Proteção para não tentar acessar data[0] se estiver vazio
+        fig_master.update_traces(visible=False); fig_master.data[0].visible = True
+        
     fig_master.add_annotation(text="Selecione uma visualização:", xref="paper", yref="paper", x=0.79, y=1.335, xanchor="right", yanchor="bottom", showarrow=False, font=dict(size=14))
     
     return fig_master
@@ -362,8 +451,18 @@ df_analise = carregar_dados_completos()
 
 if df_analise is not None and not df_analise.empty:
 
-    min_date = df_analise['Data Final (aberta)'].min().date()
-    max_date = df_analise['Data Final (aberta)'].max().date()
+    # Proteção para caso as colunas de data não sejam carregadas corretamente
+    if 'Data Final (aberta)' not in df_analise.columns or df_analise['Data Final (aberta)'].isnull().all():
+        st.error("Não foi possível processar as datas. Verifique as colunas 'Data Final' e 'Data Inicial' na planilha.")
+        min_date = date.today()
+        max_date = date.today()
+    else:
+        min_date = df_analise['Data Final (aberta)'].min().date()
+        max_date = df_analise['Data Final (aberta)'].max().date()
+        # Garante que min_date não seja maior que max_date (caso de data única)
+        if min_date > max_date:
+            min_date = max_date
+
 
     def limpar_filtros():
         st.session_state.encarregado_filtro = ["Todos"]
@@ -412,7 +511,13 @@ if df_analise is not None and not df_analise.empty:
         st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
 
     with top_col5:
-        st.slider("Intervalo de Datas (Data Final)", min_value=min_date, max_value=max_date, key='date_slider')
+        # Garante que o slider não quebre se as datas forem iguais
+        if min_date == max_date:
+            st.date_input("Data Final", value=min_date, disabled=True)
+            # Define o session_state manualmente para o filtro funcionar
+            st.session_state.date_slider = (min_date, max_date)
+        else:
+            st.slider("Intervalo de Datas (Data Final)", min_value=min_date, max_value=max_date, key='date_slider')
 
     if st.session_state.semana_filtro != "Todos":
         df_filtrado = df_filtrado[df_filtrado['Semana do Mês'] == st.session_state.semana_filtro]
