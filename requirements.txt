@@ -1,25 +1,18 @@
-# requirements.txt
-
-# Para o web app e a interface
 streamlit
-
-# Para manipulação de dados
 pandas
 numpy
-
-# Para os gráficos interativos
 plotly
-
-# Para interagir com o Google Sheets USANDO A CONTA DE SERVIÇO
 gspread
 google-auth-httplib2
 oauth2client
 matplotlib-venn
 ipywidgets
-# Para a lógica de feriados na tabela calendário
 holidays
-
-# --- ADICIONADO AGORA ---
-# Para o nosso backend customizado
 Flask
 Flask-Cors
+python-dotenv
+google-auth
+google-auth-httplib2
+google-api-python-client
+requests
+asyncio
