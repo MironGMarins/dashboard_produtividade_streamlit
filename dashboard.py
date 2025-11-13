@@ -46,6 +46,7 @@ def carregar_dados_completos():
     nome_aba_equipes = "Equipes"
     nome_aba_pontuacao = "Notas"
     nome_aba_lideranca = "Liderança"
+    nome_aba_backlog = "Backlog" 
     
     # Inicializa DataFrames vazios
     df_dados = pd.DataFrame()
@@ -53,17 +54,22 @@ def carregar_dados_completos():
     df_notas_tabela1 = pd.DataFrame()
     df_notas_tabela2 = pd.DataFrame()
     df_lideranca = pd.DataFrame()
+    df_backlog = pd.DataFrame()
 
     try:
         # --- Carregar Abas de Atividade e Equipes ---
         worksheet_dados = spreadsheet.worksheet(nome_aba_dados)
         worksheet_equipe = spreadsheet.worksheet(nome_aba_equipes)
         df_dados = pd.DataFrame(worksheet_dados.get_all_records())
-        df_equipe = pd.DataFrame(worksheet_equipe.get_all_records()) # <-- Carrega df_equipe
+        df_equipe = pd.DataFrame(worksheet_equipe.get_all_records()) 
 
         # --- Carregar Aba "Liderança" ---
         worksheet_lideranca = spreadsheet.worksheet(nome_aba_lideranca)
         df_lideranca = pd.DataFrame(worksheet_lideranca.get_all_records())
+        
+        # --- Carregar Aba "Backlog" ---
+        worksheet_backlog = spreadsheet.worksheet(nome_aba_backlog)
+        df_backlog = pd.DataFrame(worksheet_backlog.get_all_records())
 
         # ==============================================================================
         # --- Carregar AMBAS as tabelas da aba "Notas" ---
@@ -116,10 +122,10 @@ def carregar_dados_completos():
     
     except gspread.exceptions.WorksheetNotFound as e:
         st.error(f"Erro: A aba '{e.args[0]}' não foi encontrada na planilha. Verifique os nomes.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame() 
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame() 
     except Exception as e:
         st.error(f"Erro ao carregar dados do Google Sheets: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     # --- PREPARAÇÃO DOS DADOS (df_analise) ---
     df_grafico = df_dados.copy()
@@ -169,12 +175,25 @@ def carregar_dados_completos():
     df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
     df_analise = pd.merge(df_analise_temp, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
     df_analise['Status_Funcionario'].fillna('Outros', inplace=True)
+    
+    # --- PREPARAÇÃO DOS DADOS (df_backlog) ---
+    if not df_backlog.empty:
+        df_backlog['Data Inicial'] = pd.to_datetime(df_backlog['Data Inicial'], errors='coerce')
+        # --- CORREÇÃO: "Data final" para "Data Final" ---
+        df_backlog['Data Final'] = pd.to_datetime(df_backlog['Data Final'], errors='coerce') 
+        df_backlog['Status_Backlog'] = np.where(df_backlog['Data Final'].isnull(), 'Aberto', 'Fechado')
+        df_backlog['Encarregado'] = df_backlog['Encarregado'].astype(str).str.strip().replace('', 'Sem Responsável') # <-- Define um nome
+        # Junta com a equipe para permitir filtragem por Status
+        df_backlog = pd.merge(df_backlog, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
+        # Se 'Sem Responsável', o status fica 'Outros'
+        df_backlog['Status_Funcionario'].fillna('Outros', inplace=True)
 
-    # --- Retorna os CINCO DataFrames ---
-    return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe
+
+    # --- Retorna os SEIS DataFrames ---
+    return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe, df_backlog
 
 # ==============================================================================
-# FUNÇÕES PARA CRIAR OS GRÁFICOS
+# FUNÇÕES PARA CRIAR OS GRÁFICOS (Sem alterações)
 # ==============================================================================
 
 def criar_grafico_produtividade_mensal(df):
@@ -611,8 +630,8 @@ def criar_grafico_pontuacao_combinada(df_notas_enc, df_notas_liderados, df_mapa_
 # CORPO PRINCIPAL DO DASHBOARD (INTERFACE STREAMLIT)
 # ==============================================================================
 st.title("Dashboard de Produtividade")
-# --- MUDANÇA: Carrega os CINCO dataframes ---
-df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, df_equipe = carregar_dados_completos()
+# --- MUDANÇA: Carrega os SEIS dataframes ---
+df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, df_equipe, df_backlog = carregar_dados_completos()
 
 # ==============================================================================
 # --- MUDANÇA: Lógica de definição de data do slider ---
@@ -677,37 +696,37 @@ if (df_analise is not None and not df_analise.empty):
         st.button("Limpar Filtros 🗑️", on_click=limpar_filtros)
 
     # --- Lógica de filtragem (aplica-se apenas ao df_analise para a Aba 1) ---
-    df_filtrado = df_analise.copy()
+    df_filtrado_aba1 = df_analise.copy()
     if "Todos" not in st.session_state.encarregado_filtro:
-        df_filtrado = df_filtrado[df_filtrado['Encarregado'].isin(st.session_state.encarregado_filtro)]
+        df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Encarregado'].isin(st.session_state.encarregado_filtro)]
     if st.session_state.contrato_filtro != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Status_Funcionario'] == st.session_state.contrato_filtro]
+        df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Status_Funcionario'] == st.session_state.contrato_filtro]
     if st.session_state.status_tarefa_filtro != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Status_Tarefa'] == st.session_state.status_tarefa_filtro]
+        df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Status_Tarefa'] == st.session_state.status_tarefa_filtro]
         
     top_col1, top_col2, top_col3, top_col4, top_col5 = st.columns([2, 2, 1, 1, 4])
 
     with top_col1:
-        semanas_disponiveis = ["Todos"] + sorted([i for i in df_filtrado['Semana do Mês'].unique() if i is not np.nan])
+        semanas_disponiveis = ["Todos"] + sorted([i for i in df_filtrado_aba1['Semana do Mês'].unique() if i is not np.nan])
         st.selectbox("Semana do Mês", semanas_disponiveis, key='semana_filtro')
     
     with top_col2:
-        pesos_disponiveis = ["Todos"] + sorted(df_filtrado['Peso'].astype(int).unique())
+        pesos_disponiveis = ["Todos"] + sorted(df_filtrado_aba1['Peso'].astype(int).unique())
         st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
 
     with top_col5:
-        st.slider("Intervalo de Datas (para Abas 1 e 4)", min_value=min_date, max_value=max_date, key='date_slider')
+        st.slider("Intervalo de Datas (para Abas 1, 3 e 4)", min_value=min_date, max_value=max_date, key='date_slider')
 
     if st.session_state.semana_filtro != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Semana do Mês'] == st.session_state.semana_filtro]
+        df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Semana do Mês'] == st.session_state.semana_filtro]
     if st.session_state.peso_filtro != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Peso'] == st.session_state.peso_filtro]
+        df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Peso'] == st.session_state.peso_filtro]
     
     start_date, end_date = st.session_state.date_slider
-    df_filtrado = df_filtrado[(df_filtrado['Data Final (aberta)'].dt.date >= start_date) & (df_filtrado['Data Final (aberta)'].dt.date <= end_date)]
+    df_filtrado_aba1 = df_filtrado_aba1[(df_filtrado_aba1['Data Final (aberta)'].dt.date >= start_date) & (df_filtrado_aba1['Data Final (aberta)'].dt.date <= end_date)]
 
     with top_col3:
-        st.metric("Tarefas", f"{df_filtrado.shape[0]:,}")
+        st.metric("Tarefas", f"{df_filtrado_aba1.shape[0]:,}")
     with top_col4:
         # Métrica de Soma de Peso removida
         pass 
@@ -731,20 +750,20 @@ if (df_analise is not None and not df_analise.empty):
         
         col_geral1, col_geral2 = st.columns(2)
         with col_geral1:
-            fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado)
+            fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado_aba1)
             st.plotly_chart(fig_prod_mensal, use_container_width=True)
         with col_geral2:
-            fig_principal = criar_grafico_principal(df_filtrado)
+            fig_principal = criar_grafico_principal(df_filtrado_aba1)
             st.plotly_chart(fig_principal, use_container_width=True)
 
         st.markdown("---")
         st.header("Análise de Equipe e Status")
         col_equipe1, col_equipe2 = st.columns(2)
         with col_equipe1:
-            fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado)
+            fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado_aba1)
             st.plotly_chart(fig_tarefas, use_container_width=True)
         with col_equipe2:
-            fig_status = criar_grafico_status_tarefas(df_filtrado)
+            fig_status = criar_grafico_status_tarefas(df_filtrado_aba1)
             st.plotly_chart(fig_status, use_container_width=True)
         
     # --- Aba 2: Semana ---
@@ -861,8 +880,85 @@ if (df_analise is not None and not df_analise.empty):
 
     # --- Aba 3: Backlog ---
     with aba3:
-        st.header("Backlog de Tarefas Ativas")
-        st.info("Em breve: Tarefas abertas por 'Encarregado' com status 'aberto' (vermelho) e 'fechado' (verde).")
+        st.header("Backlog de Tarefas por Status")
+        
+        # ==============================================================================
+        # --- NOVO: Lógica da Aba Backlog (3 Porções) ---
+        # ==============================================================================
+        df_backlog_filtrado = df_backlog.copy()
+        
+        # 1. Aplica filtros da barra lateral (Exceto Status da Tarefa)
+        if "Todos" not in st.session_state.encarregado_filtro:
+            df_backlog_filtrado = df_backlog_filtrado[df_backlog_filtrado['Encarregado'].isin(st.session_state.encarregado_filtro + ["Sem Responsável"])] # Inclui 'Sem Responsável'
+        if st.session_state.contrato_filtro != "Todos":
+            df_backlog_filtrado = df_backlog_filtrado[df_backlog_filtrado['Status_Funcionario'] == st.session_state.contrato_filtro]
+        
+        # 2. ==============================================================================
+        # --- MUDANÇA: Filtro de data do slider REMOVIDO desta aba ---
+        # ==============================================================================
+        
+        if df_backlog.empty:
+             st.error("Aba 'Backlog' não foi carregada ou está vazia.")
+        else:
+            # Colunas para exibir
+            colunas_backlog_para_mostrar = ['Nome Task', 'Encarregado', 'Link', 'Lista', 'Data Inicial', 'Data Final', 'ID']
+            # Verificação de 'Nome Task'
+            if 'Nome Task' not in df_backlog_filtrado.columns:
+                colunas_backlog_para_mostrar = ['ID', 'Encarregado', 'Link', 'Lista', 'Data Inicial', 'Data Final']
+                st.warning("Coluna 'Nome Task' não encontrada na aba 'Backlog'. Exibindo 'ID'.")
+
+            # Configuração das colunas
+            column_config_backlog = {
+                "Link": st.column_config.LinkColumn("Tarefa Link", display_text="Abrir ↗"),
+                "Lista": st.column_config.LinkColumn("Lista Link", display_text="Abrir ↗"),
+                "Data Inicial": st.column_config.DateColumn("Data Inicial", format="DD/MM/YYYY"),
+                "Data Final": st.column_config.DateColumn("Data Final", format="DD/MM/YYYY")
+            }
+
+            # --- Seção 1: Abertas Sem Responsável ---
+            df_abertas_sem_resp = df_backlog_filtrado[
+                (df_backlog_filtrado['Status_Backlog'] == 'Aberto') &
+                (df_backlog_filtrado['Encarregado'] == 'Sem Responsável')
+            ]
+            with st.expander(f"⚫ Tarefas Abertas (Sem Responsável) - {len(df_abertas_sem_resp)}", expanded=True):
+                st.dataframe(
+                    df_abertas_sem_resp[colunas_backlog_para_mostrar], 
+                    use_container_width=True, 
+                    column_config={
+                        **column_config_backlog, 
+                        "Encarregado": None # Oculta a coluna
+                    }, 
+                    hide_index=True
+                )
+
+            # --- Seção 2: Abertas Com Responsável ---
+            df_abertas_com_resp = df_backlog_filtrado[
+                (df_backlog_filtrado['Status_Backlog'] == 'Aberto') &
+                (df_backlog_filtrado['Encarregado'] != 'Sem Responsável')
+            ]
+            with st.expander(f"🔴 Tarefas Abertas (Com Responsável) - {len(df_abertas_com_resp)}", expanded=True):
+                st.dataframe(
+                    df_abertas_com_resp[colunas_backlog_para_mostrar].sort_values(by="Encarregado"), 
+                    use_container_width=True, 
+                    column_config=column_config_backlog, 
+                    hide_index=True
+                )
+
+            # --- Seção 3: Fechadas (Todas) ---
+            df_fechadas = df_backlog_filtrado[
+                (df_backlog_filtrado['Status_Backlog'] == 'Fechado')
+            ]
+            with st.expander(f"🟢 Tarefas Fechadas (Com ou Sem Responsável) - {len(df_fechadas)}", expanded=False):
+                st.dataframe(
+                    df_fechadas[colunas_backlog_para_mostrar].sort_values(by="Data Final", ascending=False), 
+                    use_container_width=True, 
+                    column_config=column_config_backlog, 
+                    hide_index=True
+                )
+        # ==============================================================================
+        # --- FIM DA LÓGICA DA ABA BACKLOG ---
+        # ==============================================================================
+
 
     # --- Aba 4: Pontuação Geral ---
     with aba4:
@@ -908,7 +1004,7 @@ if (df_analise is not None and not df_analise.empty):
         # --- Tabela 1: Detalhes Individuais ---
         with st.expander("Ver tabela de dados (Pontuação Individual)"):
             if not df_tabela_individual.empty:
-                st.dataframe(df_tabela_individual, use_container_width=True)
+                st.dataframe(df_tabela_individual, use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhum dado de pontuação individual para exibir com os filtros atuais.")
         
@@ -936,7 +1032,7 @@ if (df_analise is not None and not df_analise.empty):
                     df_tabela_lider = df_liderados_pontos_detalhe[df_liderados_pontos_detalhe['Encarregado'].isin(liderados_deste_lider)]
                     df_tabela_lider_sorted = df_tabela_lider.sort_values(by='Pontuacao_Total_Liderado', ascending=False)
                     
-                    st.dataframe(df_tabela_lider_sorted, use_container_width=True)
+                    st.dataframe(df_tabela_lider_sorted, use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhum dado de pontuação de liderança para exibir com os filtros atuais.")
 
@@ -983,7 +1079,7 @@ else:
                 )
                 st.plotly_chart(fig_pontuacao_individual, use_container_width=True)
                 with st.expander("Ver tabela de dados (Pontuação Individual)"):
-                    st.dataframe(df_tabela_individual_fb, use_container_width=True)
+                    st.dataframe(df_tabela_individual_fb, use_container_width=True, hide_index=True)
                 
                 st.markdown("---")
                 
@@ -1003,7 +1099,7 @@ else:
                             liderados_deste_lider_fb = df_lideranca_mapa[df_lideranca_mapa['Lider'] == lider]['Liderado'].tolist()
                             df_tabela_lider_fb = df_liderados_pontos_detalhe_fb[df_liderados_pontos_detalhe_fb['Encarregado'].isin(liderados_deste_lider_fb)]
                             df_tabela_lider_sorted_fb = df_tabela_lider_fb.sort_values(by='Pontuacao_Total_Liderado', ascending=False)
-                            st.dataframe(df_tabela_lider_sorted_fb, use_container_width=True)
+                            st.dataframe(df_tabela_lider_sorted_fb, use_container_width=True, hide_index=True)
                 
                 st.markdown("---")
 
