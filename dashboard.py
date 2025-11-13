@@ -10,7 +10,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import holidays
 import json
-from datetime import date
+from datetime import date, timedelta
 
 # ==============================================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -47,6 +47,7 @@ def carregar_dados_completos():
     nome_aba_pontuacao = "Notas"
     nome_aba_lideranca = "Liderança"
     nome_aba_backlog = "Backlog" 
+    nome_aba_source = "Total BaseCamp"
     
     # Inicializa DataFrames vazios
     df_dados = pd.DataFrame()
@@ -55,21 +56,25 @@ def carregar_dados_completos():
     df_notas_tabela2 = pd.DataFrame()
     df_lideranca = pd.DataFrame()
     df_backlog = pd.DataFrame()
+    df_source = pd.DataFrame() 
+    df_source_analise = pd.DataFrame() 
 
     try:
-        # --- Carregar Abas de Atividade e Equipes ---
+        # --- Carregar Abas ---
         worksheet_dados = spreadsheet.worksheet(nome_aba_dados)
-        worksheet_equipe = spreadsheet.worksheet(nome_aba_equipes)
         df_dados = pd.DataFrame(worksheet_dados.get_all_records())
+        
+        worksheet_equipe = spreadsheet.worksheet(nome_aba_equipes)
         df_equipe = pd.DataFrame(worksheet_equipe.get_all_records()) 
 
-        # --- Carregar Aba "Liderança" ---
         worksheet_lideranca = spreadsheet.worksheet(nome_aba_lideranca)
         df_lideranca = pd.DataFrame(worksheet_lideranca.get_all_records())
         
-        # --- Carregar Aba "Backlog" ---
         worksheet_backlog = spreadsheet.worksheet(nome_aba_backlog)
         df_backlog = pd.DataFrame(worksheet_backlog.get_all_records())
+        
+        worksheet_source = spreadsheet.worksheet(nome_aba_source)
+        df_source = pd.DataFrame(worksheet_source.get_all_records())
 
         # ==============================================================================
         # --- Carregar AMBAS as tabelas da aba "Notas" ---
@@ -78,20 +83,17 @@ def carregar_dados_completos():
         all_values_notas = worksheet_pontuacao.get_all_values()
         
         primeira_linha_branca_index = -1
-        # Encontra a primeira linha totalmente em branco
         for i, row in enumerate(all_values_notas):
             if not row or all(cell == '' for cell in row):
                 primeira_linha_branca_index = i
                 break
         
-        # Se não achou linha em branco, a aba inteira é a Tabela 1
         if primeira_linha_branca_index == -1:
             dados_tabela_superior = all_values_notas
             dados_tabela_inferior = [] # Tabela 2 não existe
         else:
             dados_tabela_superior = all_values_notas[:primeira_linha_branca_index]
             
-            # Procura o início da próxima tabela
             dados_tabela_inferior_inicio = -1
             for i, row in enumerate(all_values_notas[primeira_linha_branca_index + 1:], start=primeira_linha_branca_index + 1):
                 if row and any(cell != '' for cell in row):
@@ -103,7 +105,6 @@ def carregar_dados_completos():
             else:
                 dados_tabela_inferior = [] # Tabela 2 não existe
 
-        # Processa Tabela 1 (Superior)
         if len(dados_tabela_superior) > 1:
             headers_sup = dados_tabela_superior[0]
             data_sup = dados_tabela_superior[1:]
@@ -111,7 +112,6 @@ def carregar_dados_completos():
         elif len(dados_tabela_superior) == 1:
              df_notas_tabela1 = pd.DataFrame(columns=dados_tabela_superior[0])
 
-        # Processa Tabela 2 (Inferior)
         if len(dados_tabela_inferior) > 1:
             headers_inf = dados_tabela_inferior[0]
             data_inf = dados_tabela_inferior[1:]
@@ -122,12 +122,15 @@ def carregar_dados_completos():
     
     except gspread.exceptions.WorksheetNotFound as e:
         st.error(f"Erro: A aba '{e.args[0]}' não foi encontrada na planilha. Verifique os nomes.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame() 
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame() 
     except Exception as e:
         st.error(f"Erro ao carregar dados do Google Sheets: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # --- PREPARAÇÃO DOS DADOS (df_analise) ---
+    # --- Renomeia o status da Equipe ANTES de tudo ---
+    df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
+
+    # --- PREPARAÇÃO DOS DADOS (df_analise - Aba 1 e Aba 2) ---
     df_grafico = df_dados.copy()
     colunas_para_numerico = ['Peso', 'Pablo', 'Leonardo', 'Itiel', 'Ítalo']
     for col in colunas_para_numerico:
@@ -139,58 +142,77 @@ def carregar_dados_completos():
     df_grafico['Status_Tarefa'] = np.where(df_grafico['Data Final'].isnull(), 'Aberto', 'Executado')
     data_hoje = pd.Timestamp.now().normalize()
     df_grafico['Data Final (aberta)'] = df_grafico['Data Final'].fillna(data_hoje)
+    
+    # --- CORREÇÃO: Define "Em Branco" para Encarregado vazio em df_analise ---
+    if 'Encarregado' in df_grafico.columns:
+        df_grafico['Encarregado'] = df_grafico['Encarregado'].astype(str).str.strip().replace('', 'Em Branco')
+    
+    # Preenche 'Nome Task' vazio
+    if 'Nome Task' in df_grafico.columns:
+        df_grafico['Nome Task'] = df_grafico['Nome Task'].astype(str).str.strip().replace('', 'Em Branco')
+    else:
+        # Se a coluna não existir, cria um fallback para não quebrar
+        df_grafico['Nome Task'] = 'Erro: Coluna Faltando'
 
-    data_inicio = df_grafico['Data Inicial'].min() if pd.notna(df_grafico['Data Inicial'].min()) else pd.Timestamp.now()
-    data_fim = pd.Timestamp.now()
-    tabela_calendario = pd.DataFrame({"Date": pd.date_range(start=data_inicio, end=data_fim, freq='D')})
+
+    data_inicio_analise = df_grafico['Data Inicial'].min() if pd.notna(df_grafico['Data Inicial'].min()) else data_hoje
+    data_fim_analise = data_hoje
+    
+    # --- Tabela Calendário (usada por Aba 1 e Aba 2) ---
+    data_inicio_calendario = data_inicio_analise
+    if not df_source.empty:
+        if 'Data Inicial' in df_source.columns:
+            data_inicio_source = pd.to_datetime(df_source['Data Inicial'], errors='coerce').min()
+            if pd.notna(data_inicio_source) and data_inicio_source < data_inicio_analise:
+                data_inicio_calendario = data_inicio_source
+
+    tabela_calendario = pd.DataFrame({"Date": pd.date_range(start=data_inicio_calendario, end=data_fim_analise, freq='D')})
     tabela_calendario['Ano'] = tabela_calendario['Date'].dt.year
     tabela_calendario['Nome Mês'] = tabela_calendario['Date'].dt.strftime('%b').str.capitalize()
     tabela_calendario['Mes_Ano_Abrev'] = tabela_calendario['Nome Mês'] + '/' + tabela_calendario['Date'].dt.strftime('%y')
     tabela_calendario['Ano-Mês'] = tabela_calendario['Date'].dt.strftime('%Y-%m')
     tabela_calendario['Dia'] = tabela_calendario['Date'].dt.day
     
-    # --- Colunas de Semana Adicionadas (baseada na Sexta-feira) ---
-    tabela_calendario['Dia da Semana_ISO'] = tabela_calendario['Date'].dt.dayofweek # 0=Segunda, 4=Sexta
+    tabela_calendario['Dia da Semana_ISO'] = tabela_calendario['Date'].dt.dayofweek 
     tabela_calendario['Nome Dia Semana'] = tabela_calendario['Dia da Semana_ISO'].map({0:'seg', 1:'ter', 2:'qua', 3:'qui', 4:'sex', 5:'sab', 6:'dom'})
-    
-    # Calcula o início da semana (Segunda-feira)
     tabela_calendario['Data_Inicio_Semana'] = tabela_calendario['Date'] - pd.to_timedelta(tabela_calendario['Dia da Semana_ISO'], unit='d')
-    # Calcula a Sexta-feira dessa semana
     tabela_calendario['Data_Sexta_Feira'] = tabela_calendario['Data_Inicio_Semana'] + pd.to_timedelta(4, unit='d')
-    
-    # O nome da semana agora é a data da sexta-feira
     tabela_calendario['Nome_da_Semana'] = tabela_calendario['Data_Sexta_Feira'].dt.strftime('%d/%m/%Y')
-    
-    # Coluna de ordenação
     tabela_calendario['Semana_Ano'] = tabela_calendario['Data_Sexta_Feira'].dt.strftime('%Y-%U') 
-    
     tabela_calendario['Semana do Mês'] = (tabela_calendario['Date'].dt.dayofweek + (tabela_calendario['Date'].dt.day - 1)).floordiv(7) + 1
-    # Mantém a coluna antiga para compatibilidade
     tabela_calendario['Dia da Semana'] = tabela_calendario['Dia da Semana_ISO'] + 1
 
-
     df_analise_temp = pd.merge(df_grafico, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date').drop(columns=['Date'])
-    
-    # Renomeia o status ANTES de fazer merge
-    df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
     df_analise = pd.merge(df_analise_temp, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
     df_analise['Status_Funcionario'].fillna('Outros', inplace=True)
     
-    # --- PREPARAÇÃO DOS DADOS (df_backlog) ---
+    # --- PREPARAÇÃO DOS DADOS (df_source_analise - Não usado na Aba 2 atual, mas carregado) ---
+    if not df_source.empty:
+        df_source_proc = df_source.copy()
+        df_source_proc['Data Inicial'] = pd.to_datetime(df_source_proc['Data Inicial'], errors='coerce')
+        df_source_proc['Data Final'] = pd.to_datetime(df_source_proc['Data Final'], errors='coerce')
+        df_source_proc['Status_Tarefa'] = np.where(df_source_proc['Data Final'].isnull(), 'Aberto', 'Executado')
+        df_source_proc['Data Final (aberta)'] = df_source_proc['Data Final'].fillna(data_hoje)
+        df_source_proc['Encarregado'] = df_source_proc['Encarregado'].astype(str).str.strip().replace('', 'Em Branco')
+        if 'Nome Task' in df_source_proc.columns:
+            df_source_proc['Nome Task'] = df_source_proc['Nome Task'].astype(str).str.strip().replace('', 'Em Branco')
+        
+        df_source_analise = pd.merge(df_source_proc, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date').drop(columns=['Date'])
+        df_source_analise = pd.merge(df_source_analise, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
+        df_source_analise['Status_Funcionario'].fillna('Outros', inplace=True)
+    
+    # --- PREPARAÇÃO DOS DADOS (df_backlog - Aba 3) ---
     if not df_backlog.empty:
         df_backlog['Data Inicial'] = pd.to_datetime(df_backlog['Data Inicial'], errors='coerce')
-        # --- CORREÇÃO: "Data final" para "Data Final" ---
         df_backlog['Data Final'] = pd.to_datetime(df_backlog['Data Final'], errors='coerce') 
         df_backlog['Status_Backlog'] = np.where(df_backlog['Data Final'].isnull(), 'Aberto', 'Fechado')
-        df_backlog['Encarregado'] = df_backlog['Encarregado'].astype(str).str.strip().replace('', 'Sem Responsável') # <-- Define um nome
-        # Junta com a equipe para permitir filtragem por Status
+        df_backlog['Encarregado'] = df_backlog['Encarregado'].astype(str).str.strip().replace('', 'Em Branco') 
         df_backlog = pd.merge(df_backlog, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
-        # Se 'Sem Responsável', o status fica 'Outros'
         df_backlog['Status_Funcionario'].fillna('Outros', inplace=True)
 
 
-    # --- Retorna os SEIS DataFrames ---
-    return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe, df_backlog
+    # --- Retorna os SETE DataFrames ---
+    return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe, df_backlog, df_source_analise
 
 # ==============================================================================
 # FUNÇÕES PARA CRIAR OS GRÁFICOS (Sem alterações)
@@ -630,11 +652,11 @@ def criar_grafico_pontuacao_combinada(df_notas_enc, df_notas_liderados, df_mapa_
 # CORPO PRINCIPAL DO DASHBOARD (INTERFACE STREAMLIT)
 # ==============================================================================
 st.title("Dashboard de Produtividade")
-# --- MUDANÇA: Carrega os SEIS dataframes ---
-df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, df_equipe, df_backlog = carregar_dados_completos()
+# --- MUDANÇA: Carrega os SETE dataframes ---
+df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, df_equipe, df_backlog, df_source_analise = carregar_dados_completos()
 
 # ==============================================================================
-# --- MUDANÇA: Lógica de definição de data do slider ---
+# --- Lógica de definição de data do slider ---
 # ==============================================================================
 # Define o range do slider. Prioriza a aba de atividade (df_analise)
 if (df_analise is not None and not df_analise.empty):
@@ -660,7 +682,7 @@ else: # Fallback se tudo falhar
     min_date = date.today()
     max_date = date.today()
 # ==============================================================================
-# --- FIM DA MUDANÇA ---
+# --- FIM DA LÓGICA DE DATAS ---
 # ==============================================================================
 
 
@@ -771,108 +793,121 @@ if (df_analise is not None and not df_analise.empty):
         st.header("Análise Detalhada por Semana")
         
         # ==============================================================================
-        # --- MUDANÇA: Lógica da Aba Semanal (Baseada em 'Total Basecamp...') ---
+        # --- LÓGICA DA ABA SEMANAL (Baseada em 'Total Basecamp para Notas') ---
         # ==============================================================================
         
-        # 1. Obter a lista de semanas do df_analise
-        df_analise_executado = df_analise[df_analise['Status_Tarefa'] == 'Executado']
+        # 1. Filtra a fonte de dados (df_analise) com base nos filtros da barra lateral
+        df_analise_filtrado_aba2 = df_analise.copy()
+        if "Todos" not in st.session_state.encarregado_filtro:
+            df_analise_filtrado_aba2 = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Encarregado'].isin(st.session_state.encarregado_filtro)]
+        if st.session_state.contrato_filtro != "Todos":
+            df_analise_filtrado_aba2 = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Status_Funcionario'] == st.session_state.contrato_filtro]
         
-        # Usa 'Semana_Ano' para ordenação correta e 'Nome_da_Semana' (Sexta-feira) para exibição
+        # 2. Obter a lista de semanas do df_analise_filtrado (apenas de tarefas executadas)
+        df_analise_executado = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Status_Tarefa'] == 'Executado']
+        
         semanas_df = df_analise_executado[['Nome_da_Semana', 'Semana_Ano']].drop_duplicates().sort_values(by='Semana_Ano', ascending=False)
         semanas_lista = semanas_df['Nome_da_Semana'].tolist()
         
         if not semanas_lista:
-            st.info("Nenhuma tarefa executada encontrada nos dados.")
+            st.info("Nenhuma tarefa executada encontrada para os filtros selecionados.")
         else:
-            # --- MUDANÇA: Adicionada 'key' para corrigir bug de scroll ---
+            # 3. Seletor de semana (default=mais recente)
             semana_selecionada = st.selectbox("Selecione uma Semana (data da Sexta-feira):", semanas_lista, key="aba2_semana_select")
             
             # Filtra o df de atividades para a semana (Nome_da_Semana == Sexta-feira)
-            df_semana_full = df_analise_executado[df_analise_executado['Nome_da_Semana'] == semana_selecionada]
+            df_semana_full_FECHADAS = df_analise_executado[df_analise_executado['Nome_da_Semana'] == semana_selecionada]
             
-            if df_semana_full.empty:
-                st.info("Nenhuma tarefa encontrada para esta semana.")
-            else:
-                # 4. Criar a Tabela Pivô
-                try:
-                    pivot = pd.pivot_table(
-                        df_semana_full,
-                        index='Encarregado',
-                        columns='Nome Dia Semana',
-                        values='ID',  # Usa 'ID' para contagem
-                        aggfunc='count', # 'count' é a contagem de tarefas
-                        fill_value=0
-                    )
-                    
-                    # Garante que todos os dias da semana estejam presentes
-                    colunas_dias_ordem = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
-                    pivot = pivot.reindex(columns=colunas_dias_ordem, fill_value=0)
-                    
-                    # Calcula o início (Seg) e fim (Dom) da semana para o título
-                    data_sexta = pd.to_datetime(semana_selecionada, format='%d/%m/%Y')
-                    data_segunda = data_sexta - pd.Timedelta(days=4)
-                    data_domingo = data_sexta + pd.Timedelta(days=2)
-                    
-                    st.subheader(f"Contagem de Tarefas Concluídas ({data_segunda.strftime('%d/%m')} a {data_domingo.strftime('%d/%m/%Y')})")
-                    st.info("A tabela abaixo mostra a *contagem* de tarefas que cada pessoa concluiu em cada dia da semana selecionada.")
-                    st.dataframe(pivot, use_container_width=True)
+            # 4. Criar a Tabela Pivô (Apenas tarefas fechadas)
+            try:
+                pivot = pd.pivot_table(
+                    df_semana_full_FECHADAS,
+                    index='Encarregado',
+                    columns='Nome Dia Semana',
+                    values='ID',  # Usa 'ID' para contagem
+                    aggfunc='count', # 'count' é a contagem de tarefas
+                    fill_value=0
+                )
+                
+                # Garante que todos os dias da semana estejam presentes
+                colunas_dias_ordem = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
+                pivot = pivot.reindex(columns=colunas_dias_ordem, fill_value=0)
+                
+                data_sexta = pd.to_datetime(semana_selecionada, format='%d/%m/%Y')
+                data_segunda = data_sexta - pd.Timedelta(days=4)
+                data_domingo = data_sexta + pd.Timedelta(days=2)
+                
+                st.subheader(f"Contagem de Tarefas Concluídas ({data_segunda.strftime('%d/%m')} a {data_domingo.strftime('%d/%m/%Y')})")
+                st.dataframe(pivot, use_container_width=True)
 
-                    # --- 5. Ferramenta de Drill-Down ---
-                    st.markdown("---")
-                    st.subheader("Detalhar Tarefas da Célula")
-                    st.write("Selecione um encarregado e um dia da tabela acima para ver as tarefas em detalhes.")
-                    
-                    col_detalhe1, col_detalhe2 = st.columns(2)
-                    with col_detalhe1:
-                        encarregados_na_semana = pivot.index.tolist()
-                        # --- MUDANÇA: Adicionada 'key' para corrigir bug de scroll ---
-                        encarregado_detalhe = st.selectbox("Selecione um Encarregado:", [""] + encarregados_na_semana, key="aba2_encarregado_select")
-                    
-                    with col_detalhe2:
-                        # --- MUDANÇA: Adicionada 'key' para corrigir bug de scroll ---
-                        dia_detalhe = st.selectbox("Selecione um Dia:", [""] + colunas_dias_ordem, key="aba2_dia_select")
+                # --- 5. NOVO: Detalhes por Encarregado (Abertas e Fechadas) ---
+                st.markdown("---")
+                st.subheader("Detalhes das Tarefas da Semana (Abertas e Fechadas)")
+                
+                # Pega TODAS as tarefas (abertas e fechadas) da semana
+                df_semana_COMPLETA = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Nome_da_Semana'] == semana_selecionada].copy()
+                
+                # Calcula Totais
+                total_abertas = len(df_semana_COMPLETA[df_semana_COMPLETA['Status_Tarefa'] == 'Aberto'])
+                total_fechadas = len(df_semana_COMPLETA[df_semana_COMPLETA['Status_Tarefa'] == 'Executado'])
+                total_geral = len(df_semana_COMPLETA)
 
-                    if encarregado_detalhe and dia_detalhe:
-                        df_detalhe = df_semana_full[
-                            (df_semana_full['Encarregado'] == encarregado_detalhe) &
-                            (df_semana_full['Nome Dia Semana'] == dia_detalhe)
-                        ]
+                col_met1, col_met2, col_met3 = st.columns(3)
+                col_met1.metric("Total de Tarefas na Semana", total_geral)
+                col_met2.metric("🔴 Abertas", total_abertas)
+                col_met3.metric("🟢 Fechadas", total_fechadas)
+                
+                # Pega encarregados em ordem alfabética
+                encarregados_da_semana = sorted(df_semana_COMPLETA['Encarregado'].unique())
+
+                # Colunas para mostrar e config
+                colunas_mostrar_abertas = ['Nome Task', 'Link', 'Data Inicial']
+                colunas_mostrar_fechadas = ['Nome Task', 'Link', 'Data Final']
+                column_config = {
+                    "Link": st.column_config.LinkColumn("Link", display_text="Abrir ↗"),
+                    "Data Inicial": st.column_config.DateColumn("Data Inicial", format="DD/MM/YYYY"),
+                    "Data Final": st.column_config.DateColumn("Data Final", format="DD/MM/YYYY")
+                }
+
+                # Loop por encarregado
+                for encarregado in encarregados_da_semana:
+                    df_enc = df_semana_COMPLETA[df_semana_COMPLETA['Encarregado'] == encarregado]
+                    
+                    df_abertas = df_enc[df_enc['Status_Tarefa'] == 'Aberto'].sort_values(by='Data Inicial', ascending=True)
+                    df_fechadas = df_enc[df_enc['Status_Tarefa'] == 'Executado'].sort_values(by='Data Final', ascending=True)
+                    
+                    count_abertas = len(df_abertas)
+                    count_fechadas = len(df_fechadas)
+                    count_total = count_abertas + count_fechadas
+                    
+                    with st.expander(f"{encarregado}  |  Total: {count_total} (🔴 Abertas: {count_abertas}, 🟢 Fechadas: {count_fechadas})"):
                         
-                        num_tarefas = len(df_detalhe)
-                        if num_tarefas > 0:
-                            st.success(f"Encontradas {num_tarefas} tarefas para '{encarregado_detalhe}' na '{dia_detalhe}'.")
-                            # ==============================================================================
-                            # --- MUDANÇA: "Peso" removido, LinkColumn adicionado ---
-                            # ==============================================================================
-                            colunas_para_mostrar = ['ID', 'Nome Task', 'Link', 'Data Final']
-                            
-                            # Configuração da coluna de link
-                            column_config = {
-                                "Link": st.column_config.LinkColumn("Link da Tarefa", display_text="Abrir ↗")
-                            }
-                            
-                            if 'Nome Task' not in df_detalhe.columns:
-                                st.error("Erro: A coluna 'Nome Task' não foi encontrada. Verifique o nome na aba 'Total BaseCamp para Notas'.")
-                                colunas_para_mostrar = ['ID', 'Link', 'Data Final']
-                                st.dataframe(
-                                    df_detalhe[colunas_para_mostrar], 
-                                    use_container_width=True,
-                                    column_config=column_config # Aplica a configuração
-                                )
-                            else:
-                                st.dataframe(
-                                    df_detalhe[colunas_para_mostrar], 
-                                    use_container_width=True,
-                                    column_config=column_config # Aplica a configuração
-                                )
-                            # ==============================================================================
-                            # --- FIM DA MUDANÇA ---
-                            # ==============================================================================
+                        st.markdown("##### 🔴 Tarefas Abertas")
+                        if df_abertas.empty:
+                            st.text("Nenhuma tarefa aberta esta semana.")
                         else:
-                            st.warning(f"Nenhuma tarefa encontrada para '{encarregado_detalhe}' na '{dia_detalhe}'.")
+                            st.dataframe(
+                                df_abertas[colunas_mostrar_abertas],
+                                use_container_width=True,
+                                column_config=column_config,
+                                hide_index=True
+                            )
+                        
+                        st.markdown("---")
+                        
+                        st.markdown("##### 🟢 Tarefas Fechadas")
+                        if df_fechadas.empty:
+                            st.text("Nenhuma tarefa fechada esta semana.")
+                        else:
+                            st.dataframe(
+                                df_fechadas[colunas_mostrar_fechadas],
+                                use_container_width=True,
+                                column_config=column_config,
+                                hide_index=True
+                            )
 
-                except Exception as e:
-                    st.error(f"Erro ao gerar a tabela pivô: {e}")
+            except Exception as e:
+                st.error(f"Erro ao gerar a tabela pivô: {e}")
         # ==============================================================================
         # --- FIM DA LÓGICA DA ABA SEMANAL ---
         # ==============================================================================
@@ -883,19 +918,20 @@ if (df_analise is not None and not df_analise.empty):
         st.header("Backlog de Tarefas por Status")
         
         # ==============================================================================
-        # --- NOVO: Lógica da Aba Backlog (3 Porções) ---
+        # --- Lógica da Aba Backlog (Filtros REAPLICADOS) ---
         # ==============================================================================
+        
         df_backlog_filtrado = df_backlog.copy()
         
-        # 1. Aplica filtros da barra lateral (Exceto Status da Tarefa)
+        # 1. Aplica filtros da barra lateral (Exceto Status da Tarefa e Datas)
         if "Todos" not in st.session_state.encarregado_filtro:
-            df_backlog_filtrado = df_backlog_filtrado[df_backlog_filtrado['Encarregado'].isin(st.session_state.encarregado_filtro + ["Sem Responsável"])] # Inclui 'Sem Responsável'
+            # Filtra por encarregado, mas SEMPRE inclui "Em Branco"
+            df_backlog_filtrado = df_backlog_filtrado[df_backlog_filtrado['Encarregado'].isin(st.session_state.encarregado_filtro + ["Em Branco"])] 
         if st.session_state.contrato_filtro != "Todos":
-            df_backlog_filtrado = df_backlog_filtrado[df_backlog_filtrado['Status_Funcionario'] == st.session_state.contrato_filtro]
+            # Filtra por status, mas SEMPRE inclui "Outros" (para pegar os 'Em Branco')
+            df_backlog_filtrado = df_backlog_filtrado[df_backlog_filtrado['Status_Funcionario'].isin([st.session_state.contrato_filtro, "Outros"])]
         
-        # 2. ==============================================================================
-        # --- MUDANÇA: Filtro de data do slider REMOVIDO desta aba ---
-        # ==============================================================================
+        # O filtro de DATA (slider) é IGNORADO nesta aba
         
         if df_backlog.empty:
              st.error("Aba 'Backlog' não foi carregada ou está vazia.")
@@ -918,9 +954,9 @@ if (df_analise is not None and not df_analise.empty):
             # --- Seção 1: Abertas Sem Responsável ---
             df_abertas_sem_resp = df_backlog_filtrado[
                 (df_backlog_filtrado['Status_Backlog'] == 'Aberto') &
-                (df_backlog_filtrado['Encarregado'] == 'Sem Responsável')
+                (df_backlog_filtrado['Encarregado'] == 'Em Branco') 
             ]
-            with st.expander(f"⚫ Tarefas Abertas (Sem Responsável) - {len(df_abertas_sem_resp)}", expanded=True):
+            with st.expander(f"⚫ Tarefas Abertas (Em Branco) - {len(df_abertas_sem_resp)}", expanded=True):
                 st.dataframe(
                     df_abertas_sem_resp[colunas_backlog_para_mostrar], 
                     use_container_width=True, 
@@ -934,7 +970,7 @@ if (df_analise is not None and not df_analise.empty):
             # --- Seção 2: Abertas Com Responsável ---
             df_abertas_com_resp = df_backlog_filtrado[
                 (df_backlog_filtrado['Status_Backlog'] == 'Aberto') &
-                (df_backlog_filtrado['Encarregado'] != 'Sem Responsável')
+                (df_backlog_filtrado['Encarregado'] != 'Em Branco')
             ]
             with st.expander(f"🔴 Tarefas Abertas (Com Responsável) - {len(df_abertas_com_resp)}", expanded=True):
                 st.dataframe(
