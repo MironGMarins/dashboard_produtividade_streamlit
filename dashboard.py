@@ -83,17 +83,20 @@ def carregar_dados_completos():
         all_values_notas = worksheet_pontuacao.get_all_values()
         
         primeira_linha_branca_index = -1
+        # Encontra a primeira linha totalmente em branco
         for i, row in enumerate(all_values_notas):
             if not row or all(cell == '' for cell in row):
                 primeira_linha_branca_index = i
                 break
         
+        # Se não achou linha em branco, a aba inteira é a Tabela 1
         if primeira_linha_branca_index == -1:
             dados_tabela_superior = all_values_notas
             dados_tabela_inferior = [] # Tabela 2 não existe
         else:
             dados_tabela_superior = all_values_notas[:primeira_linha_branca_index]
             
+            # Procura o início da próxima tabela
             dados_tabela_inferior_inicio = -1
             for i, row in enumerate(all_values_notas[primeira_linha_branca_index + 1:], start=primeira_linha_branca_index + 1):
                 if row and any(cell != '' for cell in row):
@@ -105,6 +108,7 @@ def carregar_dados_completos():
             else:
                 dados_tabela_inferior = [] # Tabela 2 não existe
 
+        # Processa Tabela 1 (Superior)
         if len(dados_tabela_superior) > 1:
             headers_sup = dados_tabela_superior[0]
             data_sup = dados_tabela_superior[1:]
@@ -112,6 +116,7 @@ def carregar_dados_completos():
         elif len(dados_tabela_superior) == 1:
              df_notas_tabela1 = pd.DataFrame(columns=dados_tabela_superior[0])
 
+        # Processa Tabela 2 (Inferior)
         if len(dados_tabela_inferior) > 1:
             headers_inf = dados_tabela_inferior[0]
             data_inf = dados_tabela_inferior[1:]
@@ -130,7 +135,7 @@ def carregar_dados_completos():
     # --- Renomeia o status da Equipe ANTES de tudo ---
     df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
 
-    # --- PREPARAÇÃO DOS DADOS (df_analise - Aba 1 e Aba 2) ---
+    # --- PREPARAÇÃO DOS DADOS (df_analise - Aba 1 e 2) ---
     df_grafico = df_dados.copy()
     colunas_para_numerico = ['Peso', 'Pablo', 'Leonardo', 'Itiel', 'Ítalo']
     for col in colunas_para_numerico:
@@ -143,16 +148,14 @@ def carregar_dados_completos():
     data_hoje = pd.Timestamp.now().normalize()
     df_grafico['Data Final (aberta)'] = df_grafico['Data Final'].fillna(data_hoje)
     
-    # --- CORREÇÃO: Define "Em Branco" para Encarregado vazio em df_analise ---
+    # --- CORREÇÃO: "Em Branco" para Encarregado, "Vazio" para Nome Task ---
     if 'Encarregado' in df_grafico.columns:
         df_grafico['Encarregado'] = df_grafico['Encarregado'].astype(str).str.strip().replace('', 'Em Branco')
-    
-    # Preenche 'Nome Task' vazio
     if 'Nome Task' in df_grafico.columns:
-        df_grafico['Nome Task'] = df_grafico['Nome Task'].astype(str).str.strip().replace('', 'Em Branco')
+        df_grafico['Nome Task'] = df_grafico['Nome Task'].astype(str).str.strip().replace('', 'Vazio') # <-- CORRIGIDO
     else:
-        # Se a coluna não existir, cria um fallback para não quebrar
-        df_grafico['Nome Task'] = 'Erro: Coluna Faltando'
+        st.error("Aba 'Total BaseCamp para Notas' não tem a coluna 'Nome Task'.")
+        df_grafico['Nome Task'] = 'Erro: Coluna Faltando' # Fallback
 
 
     data_inicio_analise = df_grafico['Data Inicial'].min() if pd.notna(df_grafico['Data Inicial'].min()) else data_hoje
@@ -172,8 +175,7 @@ def carregar_dados_completos():
     tabela_calendario['Mes_Ano_Abrev'] = tabela_calendario['Nome Mês'] + '/' + tabela_calendario['Date'].dt.strftime('%y')
     tabela_calendario['Ano-Mês'] = tabela_calendario['Date'].dt.strftime('%Y-%m')
     tabela_calendario['Dia'] = tabela_calendario['Date'].dt.day
-    
-    tabela_calendario['Dia da Semana_ISO'] = tabela_calendario['Date'].dt.dayofweek 
+    tabela_calendario['Dia da Semana_ISO'] = tabela_calendario['Date'].dt.dayofweek
     tabela_calendario['Nome Dia Semana'] = tabela_calendario['Dia da Semana_ISO'].map({0:'seg', 1:'ter', 2:'qua', 3:'qui', 4:'sex', 5:'sab', 6:'dom'})
     tabela_calendario['Data_Inicio_Semana'] = tabela_calendario['Date'] - pd.to_timedelta(tabela_calendario['Dia da Semana_ISO'], unit='d')
     tabela_calendario['Data_Sexta_Feira'] = tabela_calendario['Data_Inicio_Semana'] + pd.to_timedelta(4, unit='d')
@@ -195,7 +197,7 @@ def carregar_dados_completos():
         df_source_proc['Data Final (aberta)'] = df_source_proc['Data Final'].fillna(data_hoje)
         df_source_proc['Encarregado'] = df_source_proc['Encarregado'].astype(str).str.strip().replace('', 'Em Branco')
         if 'Nome Task' in df_source_proc.columns:
-            df_source_proc['Nome Task'] = df_source_proc['Nome Task'].astype(str).str.strip().replace('', 'Em Branco')
+            df_source_proc['Nome Task'] = df_source_proc['Nome Task'].astype(str).str.strip().replace('', 'Vazio') # <-- CORRIGIDO
         
         df_source_analise = pd.merge(df_source_proc, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date').drop(columns=['Date'])
         df_source_analise = pd.merge(df_source_analise, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
@@ -207,6 +209,9 @@ def carregar_dados_completos():
         df_backlog['Data Final'] = pd.to_datetime(df_backlog['Data Final'], errors='coerce') 
         df_backlog['Status_Backlog'] = np.where(df_backlog['Data Final'].isnull(), 'Aberto', 'Fechado')
         df_backlog['Encarregado'] = df_backlog['Encarregado'].astype(str).str.strip().replace('', 'Em Branco') 
+        # --- CORREÇÃO: Adiciona 'Vazio' para 'Nome Task' no backlog ---
+        if 'Nome Task' in df_backlog.columns:
+            df_backlog['Nome Task'] = df_backlog['Nome Task'].astype(str).str.strip().replace('', 'Vazio')
         df_backlog = pd.merge(df_backlog, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
         df_backlog['Status_Funcionario'].fillna('Outros', inplace=True)
 
@@ -737,7 +742,7 @@ if (df_analise is not None and not df_analise.empty):
         st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
 
     with top_col5:
-        st.slider("Intervalo de Datas (para Abas 1, 3 e 4)", min_value=min_date, max_value=max_date, key='date_slider')
+        st.slider("Intervalo de Datas (para Abas 1 e 4)", min_value=min_date, max_value=max_date, key='date_slider')
 
     if st.session_state.semana_filtro != "Todos":
         df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Semana do Mês'] == st.session_state.semana_filtro]
@@ -759,37 +764,16 @@ if (df_analise is not None and not df_analise.empty):
     # --- CORPO PRINCIPAL COM ABAS ---
     # ==============================================================================
     
-    aba1, aba2, aba3, aba4 = st.tabs([
-        "Atividade Geral", 
+    # --- MUDANÇA: "Semana" agora é a primeira aba ---
+    aba_semana, aba_geral, aba_backlog, aba_pontuacao = st.tabs([
         "Semana", 
+        "Atividade Geral", 
         "Backlog", 
         "Pontuação Geral"
     ])
 
-    # --- Aba 1: Atividade Geral ---
-    with aba1:
-        st.header("Visão Geral da Atividade")
-        
-        col_geral1, col_geral2 = st.columns(2)
-        with col_geral1:
-            fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado_aba1)
-            st.plotly_chart(fig_prod_mensal, use_container_width=True)
-        with col_geral2:
-            fig_principal = criar_grafico_principal(df_filtrado_aba1)
-            st.plotly_chart(fig_principal, use_container_width=True)
-
-        st.markdown("---")
-        st.header("Análise de Equipe e Status")
-        col_equipe1, col_equipe2 = st.columns(2)
-        with col_equipe1:
-            fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado_aba1)
-            st.plotly_chart(fig_tarefas, use_container_width=True)
-        with col_equipe2:
-            fig_status = criar_grafico_status_tarefas(df_filtrado_aba1)
-            st.plotly_chart(fig_status, use_container_width=True)
-        
-    # --- Aba 2: Semana ---
-    with aba2:
+    # --- Aba 1: Semana (Antiga Aba 2) ---
+    with aba_semana:
         st.header("Análise Detalhada por Semana")
         
         # ==============================================================================
@@ -912,9 +896,30 @@ if (df_analise is not None and not df_analise.empty):
         # --- FIM DA LÓGICA DA ABA SEMANAL ---
         # ==============================================================================
 
+    # --- Aba 2: Atividade Geral (Antiga Aba 1) ---
+    with aba_geral:
+        st.header("Visão Geral da Atividade")
+        
+        col_geral1, col_geral2 = st.columns(2)
+        with col_geral1:
+            fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado_aba1)
+            st.plotly_chart(fig_prod_mensal, use_container_width=True)
+        with col_geral2:
+            fig_principal = criar_grafico_principal(df_filtrado_aba1)
+            st.plotly_chart(fig_principal, use_container_width=True)
 
+        st.markdown("---")
+        st.header("Análise de Equipe e Status")
+        col_equipe1, col_equipe2 = st.columns(2)
+        with col_equipe1:
+            fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado_aba1)
+            st.plotly_chart(fig_tarefas, use_container_width=True)
+        with col_equipe2:
+            fig_status = criar_grafico_status_tarefas(df_filtrado_aba1)
+            st.plotly_chart(fig_status, use_container_width=True)
+        
     # --- Aba 3: Backlog ---
-    with aba3:
+    with aba_backlog:
         st.header("Backlog de Tarefas por Status")
         
         # ==============================================================================
@@ -997,7 +1002,7 @@ if (df_analise is not None and not df_analise.empty):
 
 
     # --- Aba 4: Pontuação Geral ---
-    with aba4:
+    with aba_pontuacao:
         # ==============================================================================
         # --- Lógica de Filtro para a Aba de Pontuação ---
         # ==============================================================================
@@ -1093,10 +1098,10 @@ else:
         st.info("A aba 'Pontuação Geral' pode estar funcional, mas 'Atividade Geral' está desabilitada.")
         
         # Mostra apenas a aba 4 se os dados de pontuação existirem
-        aba4_tabs = st.tabs(["Pontuação Geral"])
+        aba_pontuacao_fallback = st.tabs(["Pontuação Geral"])[0]
         
-        if aba4_tabs:
-            with aba4_tabs[0]:
+        if aba_pontuacao_fallback:
+            with aba_pontuacao_fallback:
                 
                 # Na falha, não há filtros, então exibimos todos
                 if df_equipe is not None and not df_equipe.empty:
