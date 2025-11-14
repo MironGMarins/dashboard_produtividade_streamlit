@@ -48,6 +48,7 @@ def carregar_dados_completos():
     nome_aba_lideranca = "Liderança"
     nome_aba_backlog = "Backlog" 
     nome_aba_source = "Total BaseCamp"
+    nome_aba_historico = "HistoricoDiario" # <-- NOVO
     
     # Inicializa DataFrames vazios
     df_dados = pd.DataFrame()
@@ -57,7 +58,8 @@ def carregar_dados_completos():
     df_lideranca = pd.DataFrame()
     df_backlog = pd.DataFrame()
     df_source = pd.DataFrame() 
-    df_source_analise = pd.DataFrame() 
+    df_source_analise = pd.DataFrame()
+    df_historico = pd.DataFrame() # <-- NOVO
 
     try:
         # --- Carregar Abas ---
@@ -75,6 +77,10 @@ def carregar_dados_completos():
         
         worksheet_source = spreadsheet.worksheet(nome_aba_source)
         df_source = pd.DataFrame(worksheet_source.get_all_records())
+        
+        # --- Carregar Aba "HistoricoDiario" ---
+        worksheet_historico = spreadsheet.worksheet(nome_aba_historico)
+        df_historico = pd.DataFrame(worksheet_historico.get_all_records())
 
         # ==============================================================================
         # --- Carregar AMBAS as tabelas da aba "Notas" ---
@@ -83,20 +89,17 @@ def carregar_dados_completos():
         all_values_notas = worksheet_pontuacao.get_all_values()
         
         primeira_linha_branca_index = -1
-        # Encontra a primeira linha totalmente em branco
         for i, row in enumerate(all_values_notas):
             if not row or all(cell == '' for cell in row):
                 primeira_linha_branca_index = i
                 break
         
-        # Se não achou linha em branco, a aba inteira é a Tabela 1
         if primeira_linha_branca_index == -1:
             dados_tabela_superior = all_values_notas
             dados_tabela_inferior = [] # Tabela 2 não existe
         else:
             dados_tabela_superior = all_values_notas[:primeira_linha_branca_index]
             
-            # Procura o início da próxima tabela
             dados_tabela_inferior_inicio = -1
             for i, row in enumerate(all_values_notas[primeira_linha_branca_index + 1:], start=primeira_linha_branca_index + 1):
                 if row and any(cell != '' for cell in row):
@@ -108,7 +111,6 @@ def carregar_dados_completos():
             else:
                 dados_tabela_inferior = [] # Tabela 2 não existe
 
-        # Processa Tabela 1 (Superior)
         if len(dados_tabela_superior) > 1:
             headers_sup = dados_tabela_superior[0]
             data_sup = dados_tabela_superior[1:]
@@ -116,7 +118,6 @@ def carregar_dados_completos():
         elif len(dados_tabela_superior) == 1:
              df_notas_tabela1 = pd.DataFrame(columns=dados_tabela_superior[0])
 
-        # Processa Tabela 2 (Inferior)
         if len(dados_tabela_inferior) > 1:
             headers_inf = dados_tabela_inferior[0]
             data_inf = dados_tabela_inferior[1:]
@@ -127,10 +128,10 @@ def carregar_dados_completos():
     
     except gspread.exceptions.WorksheetNotFound as e:
         st.error(f"Erro: A aba '{e.args[0]}' não foi encontrada na planilha. Verifique os nomes.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame() 
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame() 
     except Exception as e:
         st.error(f"Erro ao carregar dados do Google Sheets: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     # --- Renomeia o status da Equipe ANTES de tudo ---
     df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
@@ -148,11 +149,10 @@ def carregar_dados_completos():
     data_hoje = pd.Timestamp.now().normalize()
     df_grafico['Data Final (aberta)'] = df_grafico['Data Final'].fillna(data_hoje)
     
-    # --- CORREÇÃO: "Em Branco" para Encarregado, "Vazio" para Nome Task ---
     if 'Encarregado' in df_grafico.columns:
         df_grafico['Encarregado'] = df_grafico['Encarregado'].astype(str).str.strip().replace('', 'Em Branco')
     if 'Nome Task' in df_grafico.columns:
-        df_grafico['Nome Task'] = df_grafico['Nome Task'].astype(str).str.strip().replace('', 'Vazio') # <-- CORRIGIDO
+        df_grafico['Nome Task'] = df_grafico['Nome Task'].astype(str).str.strip().replace('', 'Vazio') 
     else:
         st.error("Aba 'Total BaseCamp para Notas' não tem a coluna 'Nome Task'.")
         df_grafico['Nome Task'] = 'Erro: Coluna Faltando' # Fallback
@@ -188,7 +188,7 @@ def carregar_dados_completos():
     df_analise = pd.merge(df_analise_temp, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
     df_analise['Status_Funcionario'].fillna('Outros', inplace=True)
     
-    # --- PREPARAÇÃO DOS DADOS (df_source_analise - Não usado na Aba 2 atual, mas carregado) ---
+    # --- PREPARAÇÃO DOS DADOS (df_source_analise) ---
     if not df_source.empty:
         df_source_proc = df_source.copy()
         df_source_proc['Data Inicial'] = pd.to_datetime(df_source_proc['Data Inicial'], errors='coerce')
@@ -197,7 +197,7 @@ def carregar_dados_completos():
         df_source_proc['Data Final (aberta)'] = df_source_proc['Data Final'].fillna(data_hoje)
         df_source_proc['Encarregado'] = df_source_proc['Encarregado'].astype(str).str.strip().replace('', 'Em Branco')
         if 'Nome Task' in df_source_proc.columns:
-            df_source_proc['Nome Task'] = df_source_proc['Nome Task'].astype(str).str.strip().replace('', 'Vazio') # <-- CORRIGIDO
+            df_source_proc['Nome Task'] = df_source_proc['Nome Task'].astype(str).str.strip().replace('', 'Vazio')
         
         df_source_analise = pd.merge(df_source_proc, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date').drop(columns=['Date'])
         df_source_analise = pd.merge(df_source_analise, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
@@ -209,19 +209,110 @@ def carregar_dados_completos():
         df_backlog['Data Final'] = pd.to_datetime(df_backlog['Data Final'], errors='coerce') 
         df_backlog['Status_Backlog'] = np.where(df_backlog['Data Final'].isnull(), 'Aberto', 'Fechado')
         df_backlog['Encarregado'] = df_backlog['Encarregado'].astype(str).str.strip().replace('', 'Em Branco') 
-        # --- CORREÇÃO: Adiciona 'Vazio' para 'Nome Task' no backlog ---
         if 'Nome Task' in df_backlog.columns:
             df_backlog['Nome Task'] = df_backlog['Nome Task'].astype(str).str.strip().replace('', 'Vazio')
         df_backlog = pd.merge(df_backlog, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
         df_backlog['Status_Funcionario'].fillna('Outros', inplace=True)
 
+    # --- PREPARAÇÃO DOS DADOS (df_historico - Novo Gráfico) ---
+    if not df_historico.empty:
+        # Renomeia para 'Data' para evitar conflito
+        df_historico.rename(columns={'Data Final': 'Data'}, inplace=True)
+        df_historico['Data'] = pd.to_datetime(df_historico['Data'], format='%d/%m/%Y', errors='coerce')
+        df_historico['Total_Fechadas'] = pd.to_numeric(df_historico['Total_Fechadas'], errors='coerce').fillna(0)
+        df_historico['Total_Tarefas'] = pd.to_numeric(df_historico['Total_Tarefas'], errors='coerce').fillna(0)
+        df_historico.dropna(subset=['Data'], inplace=True)
 
-    # --- Retorna os SETE DataFrames ---
-    return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe, df_backlog, df_source_analise
+
+    # --- Retorna os OITO DataFrames ---
+    return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe, df_backlog, df_source_analise, df_historico
 
 # ==============================================================================
-# FUNÇÕES PARA CRIAR OS GRÁFICOS (Sem alterações)
+# FUNÇÕES PARA CRIAR OS GRÁFICOS
 # ==============================================================================
+
+# ==============================================================================
+# --- NOVO: Gráfico de Histórico da Semana ---
+# ==============================================================================
+def criar_grafico_historico_semanal(df_historico):
+    """
+    Cria um gráfico de linhas mostrando o Total de Tarefas vs. Tarefas Fechadas
+    para a semana de trabalho mais recente registrada no 'HistoricoDiario'.
+    """
+    if df_historico is None or df_historico.empty:
+        return go.Figure().update_layout(
+            title="<b>Progresso da Semana Atual (Histórico)</b><br><i>Nenhum dado na aba 'HistoricoDiario' ainda.</i>",
+            template='plotly_white'
+        ), None # Retorna Figura e None
+
+    # 1. Encontrar a semana de trabalho mais recente nos dados
+    df_historico = df_historico.sort_values(by='Data', ascending=False)
+    data_mais_recente = df_historico['Data'].iloc[0]
+    
+    dia_da_semana_iso = data_mais_recente.dayofweek
+    inicio_semana = data_mais_recente - pd.to_timedelta(dia_da_semana_iso, unit='d')
+    fim_semana = inicio_semana + pd.to_timedelta(4, unit='d') # Seg a Sex
+
+    # 2. Filtrar o DF para essa semana
+    df_semana_historico = df_historico[
+        (df_historico['Data'] >= inicio_semana) &
+        (df_historico['Data'] <= fim_semana)
+    ].sort_values(by='Data', ascending=True)
+    
+    if df_semana_historico.empty:
+        return go.Figure().update_layout(
+            title="<b>Progresso da Semana Atual (Histórico)</b><br><i>Nenhum dado de histórico para a semana atual ainda.</i>",
+            template='plotly_white'
+        ), None # Retorna Figura e None
+
+    # 3. Criar o gráfico
+    fig = go.Figure()
+
+    # Linha Vermelha: Total de Tarefas
+    fig.add_trace(go.Scatter(
+        x=df_semana_historico['Data'],
+        y=df_semana_historico['Total_Tarefas'],
+        mode='lines+markers+text',
+        name='Total de Tarefas',
+        line=dict(color='red', width=3),
+        text=df_semana_historico['Total_Tarefas'],
+        textposition='top center'
+    ))
+
+    # Linha Verde: Tarefas Fechadas
+    fig.add_trace(go.Scatter(
+        x=df_semana_historico['Data'],
+        y=df_semana_historico['Total_Fechadas'],
+        mode='lines+markers+text',
+        name='Tarefas Fechadas',
+        line=dict(color='green', width=3),
+        text=df_semana_historico['Total_Fechadas'],
+        textposition='bottom center'
+    ))
+
+    fig.update_layout(
+        title=f"<b>Progresso da Semana Atual (Seg-Sex)</b>",
+        template='plotly_white',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
+    # Formata o eixo X para mostrar apenas os dias da semana
+    fig.update_xaxes(
+        dtick="D1", # Um tick por dia
+        tickformat="%a (%d/%m)" # Ex: "Seg (10/11)"
+    )
+    
+    # --- MUDANÇA: Define o eixo Y de 0 a 300 ---
+    fig.update_yaxes(range=[0, 300])
+    # --- FIM DA MUDANÇA ---
+    
+    # Retorna o último registro para as métricas
+    ultimo_registro = df_semana_historico.iloc[-1]
+    return fig, ultimo_registro
+# ==============================================================================
+# --- FIM DO NOVO GRÁFICO ---
+# ==============================================================================
+
 
 def criar_grafico_produtividade_mensal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Produtividade Mensal</b>")
@@ -657,8 +748,8 @@ def criar_grafico_pontuacao_combinada(df_notas_enc, df_notas_liderados, df_mapa_
 # CORPO PRINCIPAL DO DASHBOARD (INTERFACE STREAMLIT)
 # ==============================================================================
 st.title("Dashboard de Produtividade")
-# --- MUDANÇA: Carrega os SETE dataframes ---
-df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, df_equipe, df_backlog, df_source_analise = carregar_dados_completos()
+# --- MUDANÇA: Carrega os OITO dataframes ---
+df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, df_equipe, df_backlog, df_source_analise, df_historico = carregar_dados_completos()
 
 # ==============================================================================
 # --- Lógica de definição de data do slider ---
@@ -777,6 +868,32 @@ if (df_analise is not None and not df_analise.empty):
         st.header("Análise Detalhada por Semana")
         
         # ==============================================================================
+        # --- MUDANÇA: Gráfico de Linhas e Métricas MOVIDOS para o topo ---
+        # ==============================================================================
+        
+        # 1. Chama a função para pegar os dados do gráfico E o último registro
+        fig_historico, ultimo_registro_historico = criar_grafico_historico_semanal(df_historico)
+        
+        # 2. Exibe as Métricas primeiro
+        if ultimo_registro_historico is not None:
+            total_tarefas = ultimo_registro_historico['Total_Tarefas']
+            total_fechadas = ultimo_registro_historico['Total_Fechadas']
+            total_abertas = total_tarefas - total_fechadas
+            
+            st.markdown("### Resumo da Semana Atual (até o momento)")
+            col_met1, col_met2, col_met3 = st.columns(3)
+            col_met1.metric("Total de Tarefas na Semana", total_tarefas)
+            col_met2.metric("🔴 Abertas", total_abertas)
+            col_met3.metric("🟢 Fechadas", total_fechadas)
+        
+        # 3. Exibe o Gráfico de Linhas
+        st.plotly_chart(fig_historico, use_container_width=True)
+        
+        st.markdown("---")
+        # ==============================================================================
+        
+        
+        # ==============================================================================
         # --- LÓGICA DA ABA SEMANAL (Baseada em 'Total Basecamp para Notas') ---
         # ==============================================================================
         
@@ -830,16 +947,6 @@ if (df_analise is not None and not df_analise.empty):
                 
                 # Pega TODAS as tarefas (abertas e fechadas) da semana
                 df_semana_COMPLETA = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Nome_da_Semana'] == semana_selecionada].copy()
-                
-                # Calcula Totais
-                total_abertas = len(df_semana_COMPLETA[df_semana_COMPLETA['Status_Tarefa'] == 'Aberto'])
-                total_fechadas = len(df_semana_COMPLETA[df_semana_COMPLETA['Status_Tarefa'] == 'Executado'])
-                total_geral = len(df_semana_COMPLETA)
-
-                col_met1, col_met2, col_met3 = st.columns(3)
-                col_met1.metric("Total de Tarefas na Semana", total_geral)
-                col_met2.metric("🔴 Abertas", total_abertas)
-                col_met3.metric("🟢 Fechadas", total_fechadas)
                 
                 # Pega encarregados em ordem alfabética
                 encarregados_da_semana = sorted(df_semana_COMPLETA['Encarregado'].unique())
