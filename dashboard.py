@@ -99,7 +99,7 @@ def carregar_dados_completos():
         
         if primeira_linha_branca_index == -1:
             dados_tabela_superior = all_values_notas
-            dados_tabela_inferior = []
+            dados_tabela_inferior = [] 
         else:
             dados_tabela_superior = all_values_notas[:primeira_linha_branca_index]
             
@@ -245,30 +245,56 @@ def carregar_dados_completos():
 # FUNÇÕES PARA CRIAR OS GRÁFICOS
 # ==============================================================================
 
-def criar_grafico_historico_semanal(df_historico):
+def criar_grafico_historico_semanal(df_historico, semana_selecionada_str=None):
+    # Verifica se o dataframe base existe
     if df_historico is None or df_historico.empty:
-        return go.Figure().update_layout(title="<b>Progresso da Semana Atual (Histórico)</b><br><i>Nenhum dado na aba 'HistoricoDiario' ainda.</i>", template='plotly_white'), None
+        return go.Figure().update_layout(title="<b>Progresso Semanal (Histórico)</b><br><i>Nenhum dado na aba 'HistoricoDiario' ainda.</i>", template='plotly_white'), None
 
-    df_historico = df_historico.sort_values(by='Data', ascending=False)
-    data_mais_recente = df_historico['Data'].iloc[0]
-    dia_da_semana_iso = data_mais_recente.dayofweek
-    inicio_semana = data_mais_recente - pd.to_timedelta(dia_da_semana_iso, unit='d')
-    fim_semana = inicio_semana + pd.to_timedelta(4, unit='d') 
+    # --- DEFINIÇÃO DAS DATAS DE INÍCIO E FIM ---
+    if semana_selecionada_str:
+        # CASO 1: O usuário selecionou uma semana no Dropdown
+        try:
+            # O dropdown nos dá a data da Sexta-feira (ex: "15/11/2024")
+            data_referencia = pd.to_datetime(semana_selecionada_str, format='%d/%m/%Y')
+            
+            # Recalcula o intervalo (Segunda a Sexta dessa semana específica)
+            fim_semana = data_referencia # A data do dropdown já é a sexta
+            inicio_semana = fim_semana - pd.Timedelta(days=4) # Retrocede para segunda
+            
+            titulo_grafico = f"<b>Progresso da Semana ({inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')})</b>"
+        except ValueError:
+            # Fallback se der erro na conversão
+            titulo_grafico = "<b>Erro na Data Selecionada</b>"
+            inicio_semana = pd.Timestamp.min
+            fim_semana = pd.Timestamp.max
+    else:
+        # CASO 2: Nenhuma semana selecionada (Comportamento Padrão / Mais Recente)
+        df_historico = df_historico.sort_values(by='Data', ascending=False)
+        data_mais_recente = df_historico['Data'].iloc[0]
+        dia_da_semana_iso = data_mais_recente.dayofweek
+        inicio_semana = data_mais_recente - pd.to_timedelta(dia_da_semana_iso, unit='d')
+        fim_semana = inicio_semana + pd.to_timedelta(4, unit='d')
+        titulo_grafico = "<b>Progresso da Semana Atual (Seg-Sex)</b>"
 
+    # --- FILTRAGEM DOS DADOS ---
     df_semana_historico = df_historico[
         (df_historico['Data'] >= inicio_semana) &
         (df_historico['Data'] <= fim_semana)
     ].sort_values(by='Data', ascending=True)
     
+    # Se não tiver dados para a semana selecionada no histórico
     if df_semana_historico.empty:
-        return go.Figure().update_layout(title="<b>Progresso da Semana Atual (Histórico)</b><br><i>Nenhum dado de histórico para a semana atual ainda.</i>", template='plotly_white'), None
+        msg = f"<b>{titulo_grafico}</b><br><i>Não há registros na aba 'HistoricoDiario' para esta semana específica.</i>"
+        return go.Figure().update_layout(title=msg, template='plotly_white'), None
 
+    # --- PLOTAGEM ---
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_semana_historico['Data'], y=df_semana_historico['Total_Tarefas'], mode='lines+markers+text', name='Total de Tarefas', line=dict(color='red', width=3), text=df_semana_historico['Total_Tarefas'], textposition='top center'))
     fig.add_trace(go.Scatter(x=df_semana_historico['Data'], y=df_semana_historico['Total_Fechadas'], mode='lines+markers+text', name='Tarefas Fechadas', line=dict(color='green', width=3), text=df_semana_historico['Total_Fechadas'], textposition='bottom center'))
 
-    fig.update_layout(title=f"<b>Progresso da Semana Atual (Seg-Sex)</b>", template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    fig.update_layout(title=titulo_grafico, template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
+    # Eixo X fixo de Segunda a Sexta daquela semana
     range_semana = pd.date_range(start=inicio_semana, end=fim_semana)
     dias_pt = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex']
     tick_vals = range_semana
@@ -278,6 +304,35 @@ def criar_grafico_historico_semanal(df_historico):
     fig.update_yaxes(range=[0, 300])
     
     ultimo_registro = df_semana_historico.iloc[-1]
+    return fig, ultimo_registro
+
+def criar_grafico_historico_mensal(df_historico):
+    if df_historico is None or df_historico.empty:
+        return go.Figure().update_layout(title="<b>Progresso do Mês Atual (Histórico)</b><br><i>Nenhum dado na aba 'HistoricoDiario' ainda.</i>", template='plotly_white'), None
+
+    hoje = pd.Timestamp.now().normalize()
+    inicio_mes = hoje.replace(day=1)
+    proximo_mes = (inicio_mes + pd.DateOffset(months=1))
+    fim_mes = proximo_mes - pd.Timedelta(days=1)
+
+    df_mes_historico = df_historico[
+        (df_historico['Data'] >= inicio_mes) &
+        (df_historico['Data'] <= fim_mes)
+    ].sort_values(by='Data', ascending=True)
+    
+    if df_mes_historico.empty:
+        return go.Figure().update_layout(title="<b>Progresso do Mês Atual (Histórico)</b><br><i>Nenhum dado de histórico para o mês atual ainda.</i>", template='plotly_white'), None
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_mes_historico['Data'], y=df_mes_historico['Total_Tarefas'], mode='lines+markers+text', name='Total de Tarefas', line=dict(color='red', width=3), text=df_mes_historico['Total_Tarefas'], textposition='top center'))
+    fig.add_trace(go.Scatter(x=df_mes_historico['Data'], y=df_mes_historico['Total_Fechadas'], mode='lines+markers+text', name='Tarefas Fechadas', line=dict(color='green', width=3), text=df_mes_historico['Total_Fechadas'], textposition='bottom center'))
+
+    fig.update_layout(title=f"<b>Progresso do Mês Atual ({inicio_mes.strftime('%B/%Y')})</b>", template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    
+    fig.update_xaxes(tickformat="%d/%m")
+    fig.update_yaxes(range=[0, 300])
+    
+    ultimo_registro = df_mes_historico.iloc[-1]
     return fig, ultimo_registro
 
 def criar_grafico_produtividade_mensal(df):
@@ -292,12 +347,31 @@ def criar_grafico_produtividade_mensal(df):
     return fig
 
 # ==============================================================================
-# --- GRÁFICO PRINCIPAL (CORRIGIDO: VISUALIZAÇÃO LIMPA E PT-BR) ---
+# --- GRÁFICO PRINCIPAL (CORRIGIDO: TRIM DE BORDAS REAIS) ---
 # ==============================================================================
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
     
     ordem_dias = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
+
+    # --- FUNÇÃO AUXILIAR PARA RECORTAR ZEROS DAS PONTAS ---
+    def recortar_zeros_pontas(series_dados):
+        """Substitui zeros iniciais e finais por NaN."""
+        lista = series_dados.tolist()
+        idx_inicio = -1
+        idx_fim = -1
+        for i, v in enumerate(lista):
+            if v > 0:
+                if idx_inicio == -1: idx_inicio = i
+                idx_fim = i
+        
+        if idx_inicio == -1: return [np.nan] * len(lista)
+        
+        resultado = []
+        for i, v in enumerate(lista):
+            if i < idx_inicio or i > idx_fim: resultado.append(np.nan)
+            else: resultado.append(v)
+        return resultado
     
     # 1. PREPARAÇÃO DOS DADOS
     df_dia = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']).size().reset_index(name='Contagem')
@@ -307,9 +381,13 @@ def criar_grafico_principal(df):
     df_semana_total = df_semana.groupby('Semana do Mês')['Contagem'].sum().reset_index()
 
     df_diasemana_full = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Nome Dia Semana']).size().reset_index(name='Contagem')
-    # replace(0, np.nan) para criar GAPS (quebras na linha) em vez de ir a zero
+    
     df_diasemana_total = df_diasemana_full.groupby('Nome Dia Semana')['Contagem'].sum().reindex(ordem_dias).fillna(0).reset_index()
-    df_diasemana_total['Contagem'] = df_diasemana_total['Contagem'].replace(0, np.nan)
+    # Aplica o recorte para o total global
+    df_diasemana_total['Contagem'] = recortar_zeros_pontas(df_diasemana_total['Contagem'])
+    # *** MUDANÇA CRUCIAL: Drop NaNs para REMOVER do eixo, não apenas ocultar ***
+    df_diasemana_total = df_diasemana_total.dropna(subset=['Contagem'])
+
 
     # Ordenação Cronológica dos Meses
     mes_map = df[['Ano-Mês', 'Mes_Ano_Abrev']].drop_duplicates().sort_values('Ano-Mês')
@@ -318,9 +396,11 @@ def criar_grafico_principal(df):
     # 2. CRIAÇÃO DA FIGURA
     fig = go.Figure()
     
-    # --- A. TRACES GLOBAIS (SOMAS - Indices 0, 1, 2) ---
+    # --- A. TRACES GLOBAIS (SOMAS) ---
     fig.add_trace(go.Scatter(x=df_dia_total['Dia'], y=df_dia_total['Contagem'], name='Soma Total (Dias)', visible=True, mode='lines+markers+text', text=df_dia_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
     fig.add_trace(go.Scatter(x=df_semana_total['Semana do Mês'], y=df_semana_total['Contagem'], name='Soma Total (Semanas)', visible=False, mode='lines+markers+text', text=df_semana_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
+    
+    # *** Uso do DF limpo (sem as pontas) para o traço global ***
     fig.add_trace(go.Scatter(x=df_diasemana_total['Nome Dia Semana'], y=df_diasemana_total['Contagem'], name='Soma Total (Dia Semana)', visible=False, mode='lines+markers+text', text=df_diasemana_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
     
     # --- B. TRACES DE "DIA DO MÊS" ---
@@ -346,23 +426,9 @@ def criar_grafico_principal(df):
     for mes in opcoes_meses:
         # Mês Agregado
         d_mes = df_diasemana_full[df_diasemana_full['Mes_Ano_Abrev'] == mes].groupby('Nome Dia Semana')['Contagem'].sum().reindex(ordem_dias).fillna(0).reset_index()
-        
-        # --- CORREÇÃO: Lógica de Trim (recorte de zeros nas pontas) ---
-        vals = d_mes['Contagem'].tolist()
-        f = -1; l = -1
-        for i, v in enumerate(vals):
-            if v > 0: 
-                if f == -1: f = i
-                l = i
-        
-        nv = []
-        if f == -1: nv = [np.nan]*len(vals)
-        else:
-            for i, v in enumerate(vals):
-                if i < f or i > l: nv.append(np.nan)
-                else: nv.append(v)
-        d_mes['Contagem'] = nv
-        # ---------------------------------------------------------------
+        # Recorta e DELETA os NaNs das pontas
+        d_mes['Contagem'] = recortar_zeros_pontas(d_mes['Contagem'])
+        d_mes = d_mes.dropna(subset=['Contagem'])
 
         fig.add_trace(go.Scatter(x=d_mes['Nome Dia Semana'], y=d_mes['Contagem'], name=f"{mes} Agregado", visible=False, mode='lines+markers+text', text=d_mes['Contagem']))
         
@@ -371,21 +437,9 @@ def criar_grafico_principal(df):
         for sem in semanas_do_mes:
             d_sem = df_diasemana_full[(df_diasemana_full['Mes_Ano_Abrev'] == mes) & (df_diasemana_full['Semana do Mês'] == sem)].set_index('Nome Dia Semana').reindex(ordem_dias).fillna(0).reset_index()
             
-            # --- CORREÇÃO: Lógica de Trim para semanas individuais ---
-            vals_s = d_sem['Contagem'].tolist()
-            fs = -1; ls = -1
-            for i, v in enumerate(vals_s):
-                if v > 0:
-                    if fs == -1: fs = i
-                    ls = i
-            nvs = []
-            if fs == -1: nvs = [np.nan]*len(vals_s)
-            else:
-                for i, v in enumerate(vals_s):
-                    if i < fs or i > ls: nvs.append(np.nan)
-                    else: nvs.append(v)
-            d_sem['Contagem'] = nvs
-            # -----------------------------------------------------------
+            # Recorta e DELETA os NaNs das pontas
+            d_sem['Contagem'] = recortar_zeros_pontas(d_sem['Contagem'])
+            d_sem = d_sem.dropna(subset=['Contagem'])
 
             fig.add_trace(go.Scatter(x=d_sem['Nome Dia Semana'], y=d_sem['Contagem'], name=f"{mes} Sem {sem}", visible=False, mode='lines+markers+text', text=d_sem['Contagem']))
         
@@ -451,6 +505,8 @@ def criar_grafico_principal(df):
                 buttons=[
                     dict(label="Dia do Mês", method="update", args=[{"visible": vis_init_dia}, {"updatemenus[1].buttons": buttons_dia, "xaxis.title": "Dia", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
                     dict(label="Semana do Mês", method="update", args=[{"visible": vis_init_semana}, {"updatemenus[1].buttons": buttons_semana, "xaxis.title": "Semana", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
+                    # --- CONFIGURAÇÃO CRUCIAL: categoryorder='array' para manter Seg,Ter.. na ordem ---
+                    # O Plotly só vai desenhar os que existirem nos dados filtrados!
                     dict(label="Dia da Semana", method="update", args=[{"visible": vis_init_diasemana}, {"updatemenus[1].buttons": buttons_diasemana, "xaxis.title": "Dia da Semana", "xaxis.type": "category", "xaxis.categoryorder": "array", "xaxis.categoryarray": ordem_dias}])
                 ]
             ),
@@ -479,19 +535,23 @@ def criar_grafico_tarefas_funcionarios(df):
     return fig
 
 # ==============================================================================
-# --- GRÁFICO 1 (Aba 4): Pontuação Individual ---
+# --- GRÁFICO 1 (Aba 4): Pontuação Individual (CORRIGIDO) ---
 # ==============================================================================
 def criar_grafico_pontuacao_individual(df_notas, nomes_para_exibir, start_date, end_date):
-    if df_notas is None or df_notas.empty: return go.Figure().update_layout(title="<b>Pontuação Individual</b>")
+    if df_notas is None or df_notas.empty: return go.Figure().update_layout(title="<b>Pontuação Individual</b>"), pd.DataFrame()
     df_proc = df_notas.copy()
     colunas_pontuacao_todas = [col for col in df_proc.columns if col.lower() != 'encarregado']
+    
     colunas_pontuacao_filtradas = []
     for col in colunas_pontuacao_todas:
         try:
             data_coluna = pd.to_datetime(col, format='%Y-%m-%d').date()
-            if start_date <= data_coluna <= end_date: colunas_pontuacao_filtradas.append(col)
+            if start_date <= data_coluna <= end_date: 
+                colunas_pontuacao_filtradas.append(col)
         except ValueError: pass 
-    if not colunas_pontuacao_filtradas: return go.Figure().update_layout(title="<b>Pontuação Individual</b>")
+        
+    if not colunas_pontuacao_filtradas: return go.Figure().update_layout(title="<b>Pontuação Individual</b>"), pd.DataFrame()
+    
     for col in colunas_pontuacao_filtradas: df_proc[col] = pd.to_numeric(df_proc[col], errors='coerce').fillna(0)
     df_proc['Pontuacao_Total'] = df_proc[colunas_pontuacao_filtradas].sum(axis=1)
     df_grafico = df_proc[df_proc['Encarregado'].isin(nomes_para_exibir)].sort_values(by='Pontuacao_Total', ascending=False)
@@ -505,13 +565,16 @@ def criar_grafico_pontuacao_lideres(df_mapa_lideres, df_pontos_liderados, nomes_
     if df_mapa_lideres is None or df_mapa_lideres.empty or df_pontos_liderados is None or df_pontos_liderados.empty: return go.Figure().update_layout(title="<b>Pontuação de Líderes</b>"), pd.DataFrame(), pd.DataFrame()
     df_pontos = df_pontos_liderados.copy()
     colunas_pontuacao_todas = [col for col in df_pontos.columns if col.lower() != 'encarregado']
+    
     colunas_pontuacao_filtradas = []
     for col in colunas_pontuacao_todas:
         try:
             data_coluna = pd.to_datetime(col, format='%Y-%m-%d').date()
             if start_date <= data_coluna <= end_date: colunas_pontuacao_filtradas.append(col)
         except ValueError: pass 
+        
     if not colunas_pontuacao_filtradas: return go.Figure().update_layout(title="<b>Pontuação de Líderes</b>"), pd.DataFrame(), pd.DataFrame(columns=['Encarregado'] + colunas_pontuacao_filtradas)
+    
     for col in colunas_pontuacao_filtradas: df_pontos[col] = pd.to_numeric(df_pontos[col], errors='coerce').fillna(0)
     df_pontos['Pontuacao_Total_Liderado'] = df_pontos[colunas_pontuacao_filtradas].sum(axis=1)
     df_liderados_pontos_detalhe = df_pontos[['Encarregado', 'Pontuacao_Total_Liderado'] + colunas_pontuacao_filtradas]
@@ -604,7 +667,7 @@ if (df_analise is not None and not df_analise.empty):
         limpar_filtros(); st.session_state.filtros_iniciados = True
 
     with st.sidebar:
-        st.image("media portal logo.png", width=200)
+        # st.image("media portal logo.png", width=200) # Descomente se tiver a imagem
         st.title("Filtros")
         encarregados_disponiveis = ["Todos"] + sorted(df_analise['Encarregado'].unique())
         st.multiselect("Encarregado", encarregados_disponiveis, key='encarregado_filtro')
@@ -627,7 +690,7 @@ if (df_analise is not None and not df_analise.empty):
         pesos_disponiveis = ["Todos"] + sorted(df_filtrado_aba1['Peso'].astype(int).unique())
         st.selectbox("Peso da Tarefa", pesos_disponiveis, key='peso_filtro')
     with top_col5:
-        st.slider("Intervalo de Datas (para Abas 2 e 4)", min_value=min_date, max_value=max_date, key='date_slider')
+        st.slider("Intervalo de Datas (para Abas 4 e 5)", min_value=min_date, max_value=max_date, key='date_slider')
     
     if st.session_state.semana_filtro != "Todos": df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Semana do Mês'] == st.session_state.semana_filtro]
     if st.session_state.peso_filtro != "Todos": df_filtrado_aba1 = df_filtrado_aba1[df_filtrado_aba1['Peso'] == st.session_state.peso_filtro]
@@ -639,35 +702,48 @@ if (df_analise is not None and not df_analise.empty):
     with top_col4: pass 
     st.markdown("---") 
 
-    aba_semana, aba_geral, aba_backlog, aba_pontuacao = st.tabs(["Semana", "Atividade Geral", "Backlog", "Pontuação Geral"])
+    # --- ATUALIZAÇÃO DA ORDEM DAS ABAS E INCLUSÃO DA ABA MÊS ---
+    aba_semana, aba_mes, aba_backlog, aba_geral, aba_pontuacao = st.tabs(["Semana", "Mês", "Backlog", "Atividade Geral", "Pontuação Geral"])
 
     with aba_semana:
         st.header("Análise Detalhada por Semana")
-        fig_historico, ultimo_registro_historico = criar_grafico_historico_semanal(df_historico)
-        if ultimo_registro_historico is not None:
-            total_tarefas = ultimo_registro_historico['Total_Tarefas']
-            total_fechadas = ultimo_registro_historico['Total_Fechadas']
-            total_abertas = total_tarefas - total_fechadas
-            st.markdown("### Resumo da Semana Atual (até o momento)")
-            col_met1, col_met2, col_met3 = st.columns(3)
-            col_met1.metric("Total de Tarefas na Semana", total_tarefas)
-            col_met2.metric("🔴 Abertas", total_abertas)
-            col_met3.metric("🟢 Fechadas", total_fechadas)
         
-        st.plotly_chart(fig_historico, use_container_width=True)
-        st.markdown("---")
-        
+        # 1. PREPARAÇÃO DO FILTRO DE SEMANAS (Movemos para cima)
         df_analise_filtrado_aba2 = df_analise.copy()
-        if "Todos" not in st.session_state.encarregado_filtro: df_analise_filtrado_aba2 = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Encarregado'].isin(st.session_state.encarregado_filtro)]
-        if st.session_state.contrato_filtro != "Todos": df_analise_filtrado_aba2 = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Status_Funcionario'] == st.session_state.contrato_filtro]
+        if "Todos" not in st.session_state.encarregado_filtro: 
+            df_analise_filtrado_aba2 = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Encarregado'].isin(st.session_state.encarregado_filtro)]
+        if st.session_state.contrato_filtro != "Todos": 
+            df_analise_filtrado_aba2 = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Status_Funcionario'] == st.session_state.contrato_filtro]
         
         df_analise_executado = df_analise_filtrado_aba2[df_analise_filtrado_aba2['Status_Tarefa'] == 'Executado']
         semanas_df = df_analise_executado[['Nome_da_Semana', 'Semana_Ano']].drop_duplicates().sort_values(by='Semana_Ano', ascending=False)
         semanas_lista = semanas_df['Nome_da_Semana'].tolist()
         
-        if not semanas_lista: st.info("Nenhuma tarefa executada encontrada para os filtros selecionados.")
+        if not semanas_lista: 
+            st.info("Nenhuma tarefa executada encontrada para os filtros selecionados.")
         else:
+            # 2. O SELETOR AGORA VEM PRIMEIRO
             semana_selecionada = st.selectbox("Selecione uma Semana (data da Sexta-feira):", semanas_lista, key="aba2_semana_select")
+            
+            # 3. GERAR O GRÁFICO SINCRONIZADO COM A SELEÇÃO
+            # Passamos 'semana_selecionada' para a função
+            fig_historico, ultimo_registro_historico = criar_grafico_historico_semanal(df_historico, semana_selecionada)
+            
+            # Exibir Métricas baseadas no histórico daquela semana
+            if ultimo_registro_historico is not None:
+                total_tarefas = ultimo_registro_historico['Total_Tarefas']
+                total_fechadas = ultimo_registro_historico['Total_Fechadas']
+                total_abertas = total_tarefas - total_fechadas
+                st.markdown(f"### Resumo da Semana Selecionada ({semana_selecionada})")
+                col_met1, col_met2, col_met3 = st.columns(3)
+                col_met1.metric("Total de Tarefas (Histórico)", total_tarefas)
+                col_met2.metric("🔴 Abertas (Histórico)", total_abertas)
+                col_met3.metric("🟢 Fechadas (Histórico)", total_fechadas)
+            
+            st.plotly_chart(fig_historico, use_container_width=True)
+            st.markdown("---")
+
+            # 4. TABELA PIVÔ (Lógica mantida, já usa a semana_selecionada)
             df_semana_full_FECHADAS = df_analise_executado[df_analise_executado['Nome_da_Semana'] == semana_selecionada]
             try:
                 pivot = pd.pivot_table(df_semana_full_FECHADAS, index='Encarregado', columns='Nome Dia Semana', values='ID', aggfunc='count', fill_value=0)
@@ -691,7 +767,7 @@ if (df_analise is not None and not df_analise.empty):
                     df_abertas = df_enc[df_enc['Status_Tarefa'] == 'Aberto'].sort_values(by='Data Inicial', ascending=True)
                     df_fechadas = df_enc[df_enc['Status_Tarefa'] == 'Executado'].sort_values(by='Data Final', ascending=True)
                     count_abertas = len(df_abertas); count_fechadas = len(df_fechadas); count_total = count_abertas + count_fechadas
-                    with st.expander(f"{encarregado}  |  Total: {count_total} (🔴 Abertas: {count_abertas}, 🟢 Fechadas: {count_fechadas})"):
+                    with st.expander(f"{encarregado}  |  Total: {count_total} (🔴 Abertas: {count_abertas}, 🟢 Fechadas: {count_fechadas})"):
                         st.markdown("##### 🔴 Tarefas Abertas")
                         if df_abertas.empty: st.text("Nenhuma tarefa aberta esta semana.")
                         else: st.dataframe(df_abertas[colunas_mostrar_abertas], use_container_width=True, column_config=column_config, hide_index=True)
@@ -701,16 +777,90 @@ if (df_analise is not None and not df_analise.empty):
                         else: st.dataframe(df_fechadas[colunas_mostrar_fechadas], use_container_width=True, column_config=column_config, hide_index=True)
             except Exception as e: st.error(f"Erro ao gerar a tabela pivô: {e}")
 
-    with aba_geral:
-        st.header("Visão Geral da Atividade")
-        col_geral1, col_geral2 = st.columns(2)
-        with col_geral1: fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado_aba1); st.plotly_chart(fig_prod_mensal, use_container_width=True)
-        with col_geral2: fig_principal = criar_grafico_principal(df_filtrado_aba1); st.plotly_chart(fig_principal, use_container_width=True)
-        st.markdown("---"); st.header("Análise de Equipe e Status")
-        col_equipe1, col_equipe2 = st.columns(2)
-        with col_equipe1: fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado_aba1); st.plotly_chart(fig_tarefas, use_container_width=True)
-        with col_equipe2: fig_status = criar_grafico_status_tarefas(df_filtrado_aba1); st.plotly_chart(fig_status, use_container_width=True)
+    with aba_mes:
+        st.header("Análise Detalhada por Mês")
+        # Gráfico de Histórico Mensal
+        fig_historico_mes, ultimo_registro_mes = criar_grafico_historico_mensal(df_historico)
         
+        if ultimo_registro_mes is not None:
+            total_tarefas_mes = ultimo_registro_mes['Total_Tarefas']
+            total_fechadas_mes = ultimo_registro_mes['Total_Fechadas']
+            total_abertas_mes = total_tarefas_mes - total_fechadas_mes
+            st.markdown("### Resumo do Mês Atual (até o momento)")
+            col_met_m1, col_met_m2, col_met_m3 = st.columns(3)
+            col_met_m1.metric("Total de Tarefas no Mês", total_tarefas_mes)
+            col_met_m2.metric("🔴 Abertas", total_abertas_mes)
+            col_met_m3.metric("🟢 Fechadas", total_fechadas_mes)
+
+        st.plotly_chart(fig_historico_mes, use_container_width=True)
+        st.markdown("---")
+
+        # Lógica para Tabela Pivô do Mês Atual
+        df_analise_filtrado_aba_mes = df_analise.copy()
+        if "Todos" not in st.session_state.encarregado_filtro: df_analise_filtrado_aba_mes = df_analise_filtrado_aba_mes[df_analise_filtrado_aba_mes['Encarregado'].isin(st.session_state.encarregado_filtro)]
+        if st.session_state.contrato_filtro != "Todos": df_analise_filtrado_aba_mes = df_analise_filtrado_aba_mes[df_analise_filtrado_aba_mes['Status_Funcionario'] == st.session_state.contrato_filtro]
+
+        # Filtrar apenas Executadas no Mês Atual
+        hoje = pd.Timestamp.now().normalize()
+        inicio_mes_atual = hoje.replace(day=1)
+        proximo_mes_dt = (inicio_mes_atual + pd.DateOffset(months=1))
+        fim_mes_atual = proximo_mes_dt - pd.Timedelta(days=1)
+
+        df_analise_executado_mes = df_analise_filtrado_aba_mes[
+            (df_analise_filtrado_aba_mes['Status_Tarefa'] == 'Executado') &
+            (df_analise_filtrado_aba_mes['Data Final (aberta)'] >= inicio_mes_atual) &
+            (df_analise_filtrado_aba_mes['Data Final (aberta)'] <= fim_mes_atual)
+        ].copy()
+
+        if df_analise_executado_mes.empty:
+            st.info(f"Nenhuma tarefa executada encontrada neste mês ({inicio_mes_atual.strftime('%B/%Y')}) para os filtros selecionados.")
+        else:
+            try:
+                # Pivot por DIA DO MÊS (1 a 31)
+                df_analise_executado_mes['Dia_do_Mes'] = df_analise_executado_mes['Data Final (aberta)'].dt.day
+                pivot_mes = pd.pivot_table(df_analise_executado_mes, index='Encarregado', columns='Dia_do_Mes', values='ID', aggfunc='count', fill_value=0)
+                
+                # Garantir que todas as colunas (dias) apareçam ordenadas
+                dias_existentes = sorted(pivot_mes.columns.tolist())
+                pivot_mes = pivot_mes.reindex(columns=dias_existentes, fill_value=0)
+
+                st.subheader(f"Contagem de Tarefas Concluídas - {inicio_mes_atual.strftime('%B/%Y')}")
+                st.dataframe(pivot_mes, use_container_width=True)
+
+                st.markdown("---")
+                st.subheader("Detalhes das Tarefas do Mês Atual")
+                
+                # Detalhes (Abertas e Fechadas no Mês)
+                # Para "Abertas", consideramos aquelas criadas ou pendentes no mês? 
+                # Simplificação: Vamos mostrar todas do mês com base na Data Final (executadas) e Data Inicial (abertas que começaram este mês)
+                
+                df_mes_detalhes = df_analise_filtrado_aba_mes[
+                    ((df_analise_filtrado_aba_mes['Status_Tarefa'] == 'Executado') & (df_analise_filtrado_aba_mes['Data Final (aberta)'] >= inicio_mes_atual) & (df_analise_filtrado_aba_mes['Data Final (aberta)'] <= fim_mes_atual)) |
+                    ((df_analise_filtrado_aba_mes['Status_Tarefa'] == 'Aberto') & (df_analise_filtrado_aba_mes['Data Inicial'] >= inicio_mes_atual))
+                ].copy()
+
+                encarregados_do_mes = sorted(df_mes_detalhes['Encarregado'].unique())
+                colunas_mostrar_abertas = ['Nome Task', 'Link', 'Data Inicial']
+                colunas_mostrar_fechadas = ['Nome Task', 'Link', 'Data Final']
+                column_config = {"Link": st.column_config.LinkColumn("Link", display_text="Abrir ↗"), "Data Inicial": st.column_config.DateColumn("Data Inicial", format="DD/MM/YYYY"), "Data Final": st.column_config.DateColumn("Data Final", format="DD/MM/YYYY")}
+
+                for encarregado in encarregados_do_mes:
+                    df_enc = df_mes_detalhes[df_mes_detalhes['Encarregado'] == encarregado]
+                    df_abertas = df_enc[df_enc['Status_Tarefa'] == 'Aberto'].sort_values(by='Data Inicial', ascending=True)
+                    df_fechadas = df_enc[df_enc['Status_Tarefa'] == 'Executado'].sort_values(by='Data Final', ascending=True)
+                    count_abertas = len(df_abertas); count_fechadas = len(df_fechadas); count_total = count_abertas + count_fechadas
+                    
+                    with st.expander(f"{encarregado}  |  Total: {count_total} (🔴 Abertas: {count_abertas}, 🟢 Fechadas: {count_fechadas})"):
+                        st.markdown("##### 🔴 Tarefas Abertas (Iniciadas neste mês)")
+                        if df_abertas.empty: st.text("Nenhuma tarefa aberta iniciada este mês.")
+                        else: st.dataframe(df_abertas[colunas_mostrar_abertas], use_container_width=True, column_config=column_config, hide_index=True)
+                        st.markdown("---")
+                        st.markdown("##### 🟢 Tarefas Fechadas (Neste mês)")
+                        if df_fechadas.empty: st.text("Nenhuma tarefa fechada neste mês.")
+                        else: st.dataframe(df_fechadas[colunas_mostrar_fechadas], use_container_width=True, column_config=column_config, hide_index=True)
+
+            except Exception as e: st.error(f"Erro ao gerar a tabela do mês: {e}")
+
     with aba_backlog:
         st.header("Backlog de Tarefas por Status")
         df_backlog_filtrado = df_backlog.copy()
@@ -734,6 +884,16 @@ if (df_analise is not None and not df_analise.empty):
             df_fechadas = df_backlog_filtrado[(df_backlog_filtrado['Status_Backlog'] == 'Fechado')]
             with st.expander(f"🟢 Tarefas Fechadas (Com ou Sem Responsável) - {len(df_fechadas)}", expanded=False): st.dataframe(df_fechadas[colunas_backlog_para_mostrar].sort_values(by="Data Final", ascending=False), use_container_width=True, column_config=column_config_backlog, hide_index=True)
 
+    with aba_geral:
+        st.header("Visão Geral da Atividade")
+        col_geral1, col_geral2 = st.columns(2)
+        with col_geral1: fig_prod_mensal = criar_grafico_produtividade_mensal(df_filtrado_aba1); st.plotly_chart(fig_prod_mensal, use_container_width=True)
+        with col_geral2: fig_principal = criar_grafico_principal(df_filtrado_aba1); st.plotly_chart(fig_principal, use_container_width=True)
+        st.markdown("---"); st.header("Análise de Equipe e Status")
+        col_equipe1, col_equipe2 = st.columns(2)
+        with col_equipe1: fig_tarefas = criar_grafico_tarefas_funcionarios(df_filtrado_aba1); st.plotly_chart(fig_tarefas, use_container_width=True)
+        with col_equipe2: fig_status = criar_grafico_status_tarefas(df_filtrado_aba1); st.plotly_chart(fig_status, use_container_width=True)
+        
     with aba_pontuacao:
         nomes_status_filtrados = []
         if df_equipe is not None and not df_equipe.empty:
