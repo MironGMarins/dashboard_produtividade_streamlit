@@ -246,29 +246,22 @@ def carregar_dados_completos():
 # ==============================================================================
 
 def criar_grafico_historico_semanal(df_historico, semana_selecionada_str=None):
-    # Verifica se o dataframe base existe
     if df_historico is None or df_historico.empty:
         return go.Figure().update_layout(title="<b>Progresso Semanal (Histórico)</b><br><i>Nenhum dado na aba 'HistoricoDiario' ainda.</i>", template='plotly_white'), None
 
-    # --- DEFINIÇÃO DAS DATAS DE INÍCIO E FIM ---
+    # --- Lógica Sincronizada com o Dropdown ---
     if semana_selecionada_str:
-        # CASO 1: O usuário selecionou uma semana no Dropdown
         try:
-            # O dropdown nos dá a data da Sexta-feira (ex: "15/11/2024")
+            # Se o usuário selecionou uma semana, pegamos a Sexta-feira dela e calculamos a Segunda
             data_referencia = pd.to_datetime(semana_selecionada_str, format='%d/%m/%Y')
-            
-            # Recalcula o intervalo (Segunda a Sexta dessa semana específica)
-            fim_semana = data_referencia # A data do dropdown já é a sexta
-            inicio_semana = fim_semana - pd.Timedelta(days=4) # Retrocede para segunda
-            
+            fim_semana = data_referencia 
+            inicio_semana = fim_semana - pd.Timedelta(days=4)
             titulo_grafico = f"<b>Progresso da Semana ({inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')})</b>"
         except ValueError:
-            # Fallback se der erro na conversão
             titulo_grafico = "<b>Erro na Data Selecionada</b>"
-            inicio_semana = pd.Timestamp.min
-            fim_semana = pd.Timestamp.max
+            inicio_semana = pd.Timestamp.min; fim_semana = pd.Timestamp.max
     else:
-        # CASO 2: Nenhuma semana selecionada (Comportamento Padrão / Mais Recente)
+        # Comportamento padrão (última semana registrada)
         df_historico = df_historico.sort_values(by='Data', ascending=False)
         data_mais_recente = df_historico['Data'].iloc[0]
         dia_da_semana_iso = data_mais_recente.dayofweek
@@ -276,25 +269,21 @@ def criar_grafico_historico_semanal(df_historico, semana_selecionada_str=None):
         fim_semana = inicio_semana + pd.to_timedelta(4, unit='d')
         titulo_grafico = "<b>Progresso da Semana Atual (Seg-Sex)</b>"
 
-    # --- FILTRAGEM DOS DADOS ---
     df_semana_historico = df_historico[
         (df_historico['Data'] >= inicio_semana) &
         (df_historico['Data'] <= fim_semana)
     ].sort_values(by='Data', ascending=True)
     
-    # Se não tiver dados para a semana selecionada no histórico
     if df_semana_historico.empty:
         msg = f"<b>{titulo_grafico}</b><br><i>Não há registros na aba 'HistoricoDiario' para esta semana específica.</i>"
         return go.Figure().update_layout(title=msg, template='plotly_white'), None
 
-    # --- PLOTAGEM ---
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_semana_historico['Data'], y=df_semana_historico['Total_Tarefas'], mode='lines+markers+text', name='Total de Tarefas', line=dict(color='red', width=3), text=df_semana_historico['Total_Tarefas'], textposition='top center'))
     fig.add_trace(go.Scatter(x=df_semana_historico['Data'], y=df_semana_historico['Total_Fechadas'], mode='lines+markers+text', name='Tarefas Fechadas', line=dict(color='green', width=3), text=df_semana_historico['Total_Fechadas'], textposition='bottom center'))
 
     fig.update_layout(title=titulo_grafico, template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
-    # Eixo X fixo de Segunda a Sexta daquela semana
     range_semana = pd.date_range(start=inicio_semana, end=fim_semana)
     dias_pt = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex']
     tick_vals = range_semana
@@ -323,16 +312,39 @@ def criar_grafico_historico_mensal(df_historico):
     if df_mes_historico.empty:
         return go.Figure().update_layout(title="<b>Progresso do Mês Atual (Histórico)</b><br><i>Nenhum dado de histórico para o mês atual ainda.</i>", template='plotly_white'), None
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_mes_historico['Data'], y=df_mes_historico['Total_Tarefas'], mode='lines+markers+text', name='Total de Tarefas', line=dict(color='red', width=3), text=df_mes_historico['Total_Tarefas'], textposition='top center'))
-    fig.add_trace(go.Scatter(x=df_mes_historico['Data'], y=df_mes_historico['Total_Fechadas'], mode='lines+markers+text', name='Tarefas Fechadas', line=dict(color='green', width=3), text=df_mes_historico['Total_Fechadas'], textposition='bottom center'))
+    # --- ALGORITMO DE SOMA CUMULATIVA MENSAL (COM CÁLCULO DE TOTAL CORRIGIDO) ---
+    # Lógica:
+    # 1. Fechadas: Usa Deltas para corrigir a virada de semana (acumula tudo).
+    # 2. Total: É a soma de 'Fechadas Acumuladas' + 'Abertas Reais do Dia'.
+    #    Isso evita duplicar o backlog na virada da semana.
+    
+    df_calc = df_mes_historico.copy()
+    
+    # 1. Processo para FECHADAS (Acumulativo Puro)
+    df_calc['Delta_Fechadas'] = df_calc['Total_Fechadas'].diff().fillna(df_calc['Total_Fechadas'])
+    mask_reset_fechadas = df_calc['Delta_Fechadas'] < 0
+    df_calc.loc[mask_reset_fechadas, 'Delta_Fechadas'] = df_calc.loc[mask_reset_fechadas, 'Total_Fechadas']
+    df_calc['Mensal_Fechadas'] = df_calc['Delta_Fechadas'].cumsum()
 
-    fig.update_layout(title=f"<b>Progresso do Mês Atual ({inicio_mes.strftime('%B/%Y')})</b>", template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    # 2. Processo para TOTAL (Fechadas Acumuladas + Backlog do Dia)
+    # Backlog Real = (Total Bruto da Planilha - Fechadas Brutas da Planilha)
+    df_calc['Backlog_Real'] = df_calc['Total_Tarefas'] - df_calc['Total_Fechadas']
+    
+    # Total Grafico = Fechadas Acumuladas (nosso cálculo) + Backlog Real
+    df_calc['Mensal_Tarefas'] = df_calc['Mensal_Fechadas'] + df_calc['Backlog_Real']
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_calc['Data'], y=df_calc['Mensal_Tarefas'], mode='lines+markers+text', name='Total Acumulado (Mês)', line=dict(color='red', width=3), text=df_calc['Mensal_Tarefas'], textposition='top center'))
+    fig.add_trace(go.Scatter(x=df_calc['Data'], y=df_calc['Mensal_Fechadas'], mode='lines+markers+text', name='Fechadas Acumulado (Mês)', line=dict(color='green', width=3), text=df_calc['Mensal_Fechadas'], textposition='bottom center'))
+
+    fig.update_layout(title=f"<b>Progresso do Mês Atual ({inicio_mes.strftime('%B/%Y')}) - Acumulado</b>", template='plotly_white', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
     fig.update_xaxes(tickformat="%d/%m")
-    fig.update_yaxes(range=[0, 300])
+    # Ajusta o range Y para caber o acumulado do mês
+    max_val = max(df_calc['Mensal_Tarefas'].max(), df_calc['Mensal_Fechadas'].max())
+    fig.update_yaxes(range=[0, max_val * 1.1])
     
-    ultimo_registro = df_mes_historico.iloc[-1]
+    ultimo_registro = df_calc.iloc[-1]
     return fig, ultimo_registro
 
 def criar_grafico_produtividade_mensal(df):
@@ -726,7 +738,6 @@ if (df_analise is not None and not df_analise.empty):
             semana_selecionada = st.selectbox("Selecione uma Semana (data da Sexta-feira):", semanas_lista, key="aba2_semana_select")
             
             # 3. GERAR O GRÁFICO SINCRONIZADO COM A SELEÇÃO
-            # Passamos 'semana_selecionada' para a função
             fig_historico, ultimo_registro_historico = criar_grafico_historico_semanal(df_historico, semana_selecionada)
             
             # Exibir Métricas baseadas no histórico daquela semana
@@ -771,7 +782,6 @@ if (df_analise is not None and not df_analise.empty):
                         st.markdown("##### 🔴 Tarefas Abertas")
                         if df_abertas.empty: st.text("Nenhuma tarefa aberta esta semana.")
                         else: st.dataframe(df_abertas[colunas_mostrar_abertas], use_container_width=True, column_config=column_config, hide_index=True)
-                        st.markdown("---")
                         st.markdown("##### 🟢 Tarefas Fechadas")
                         if df_fechadas.empty: st.text("Nenhuma tarefa fechada esta semana.")
                         else: st.dataframe(df_fechadas[colunas_mostrar_fechadas], use_container_width=True, column_config=column_config, hide_index=True)
@@ -779,18 +789,20 @@ if (df_analise is not None and not df_analise.empty):
 
     with aba_mes:
         st.header("Análise Detalhada por Mês")
-        # Gráfico de Histórico Mensal
+        # Gráfico de Histórico Mensal (COM CÁLCULO CUMULATIVO CORRIGIDO)
         fig_historico_mes, ultimo_registro_mes = criar_grafico_historico_mensal(df_historico)
         
         if ultimo_registro_mes is not None:
-            total_tarefas_mes = ultimo_registro_mes['Total_Tarefas']
-            total_fechadas_mes = ultimo_registro_mes['Total_Fechadas']
+            # Mostramos o acumulado calculado, não o bruto da planilha
+            total_tarefas_mes = ultimo_registro_mes['Mensal_Tarefas']
+            total_fechadas_mes = ultimo_registro_mes['Mensal_Fechadas']
             total_abertas_mes = total_tarefas_mes - total_fechadas_mes
-            st.markdown("### Resumo do Mês Atual (até o momento)")
+            
+            st.markdown("### Resumo do Mês Atual (Acumulado)")
             col_met_m1, col_met_m2, col_met_m3 = st.columns(3)
-            col_met_m1.metric("Total de Tarefas no Mês", total_tarefas_mes)
-            col_met_m2.metric("🔴 Abertas", total_abertas_mes)
-            col_met_m3.metric("🟢 Fechadas", total_fechadas_mes)
+            col_met_m1.metric("Total Acumulado (Mês)", f"{total_tarefas_mes:.0f}")
+            col_met_m2.metric("🔴 Gap (Abertas)", f"{total_abertas_mes:.0f}")
+            col_met_m3.metric("🟢 Fechadas (Mês)", f"{total_fechadas_mes:.0f}")
 
         st.plotly_chart(fig_historico_mes, use_container_width=True)
         st.markdown("---")
@@ -831,9 +843,6 @@ if (df_analise is not None and not df_analise.empty):
                 st.subheader("Detalhes das Tarefas do Mês Atual")
                 
                 # Detalhes (Abertas e Fechadas no Mês)
-                # Para "Abertas", consideramos aquelas criadas ou pendentes no mês? 
-                # Simplificação: Vamos mostrar todas do mês com base na Data Final (executadas) e Data Inicial (abertas que começaram este mês)
-                
                 df_mes_detalhes = df_analise_filtrado_aba_mes[
                     ((df_analise_filtrado_aba_mes['Status_Tarefa'] == 'Executado') & (df_analise_filtrado_aba_mes['Data Final (aberta)'] >= inicio_mes_atual) & (df_analise_filtrado_aba_mes['Data Final (aberta)'] <= fim_mes_atual)) |
                     ((df_analise_filtrado_aba_mes['Status_Tarefa'] == 'Aberto') & (df_analise_filtrado_aba_mes['Data Inicial'] >= inicio_mes_atual))
