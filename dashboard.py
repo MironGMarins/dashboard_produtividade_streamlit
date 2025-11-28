@@ -26,15 +26,11 @@ def converter_data_robusta(series):
     Converte uma série de dados para datetime forçando o padrão brasileiro (Dia/Mês)
     para formatos ambíguos, mas aceitando ISO (Ano-Mês-Dia) corretamente.
     """
-    # Garante que é string e remove espaços
     series = series.astype(str).str.strip()
-    # Remove lixo comum
-    series = series.replace(['nan', 'None', '', 'NaT', '0'], np.nan)
-    # dayfirst=True é a chave: resolve 04/05/2025 como 04 de Maio, não 05 de Abril.
+    series = series.replace(['nan', 'None', '', 'NaT', '0', '#N/A', 'nan'], np.nan)
     return pd.to_datetime(series, dayfirst=True, errors='coerce')
 
 def tornar_colunas_unicas(lista_colunas):
-    """Recebe ['Data', 'Data', 'Nome'] e retorna ['Data', 'Data.1', 'Nome']"""
     seen = {}
     nova_lista = []
     for col in lista_colunas:
@@ -48,7 +44,6 @@ def tornar_colunas_unicas(lista_colunas):
     return nova_lista
 
 def recortar_zeros_pontas(series_dados):
-    """Substitui zeros iniciais e finais por NaN para gráficos de linha."""
     lista = series_dados.tolist()
     idx_inicio = -1
     idx_fim = -1
@@ -66,7 +61,6 @@ def recortar_zeros_pontas(series_dados):
     return resultado
 
 def aplicar_heatmap_vermelho(df):
-    """Aplica um gradiente de vermelho na tabela: quanto maior o valor, mais escuro."""
     return df.style.background_gradient(cmap='Reds', axis=None).format(precision=0)
 
 # ==============================================================================
@@ -74,7 +68,6 @@ def aplicar_heatmap_vermelho(df):
 # ==============================================================================
 @st.cache_data(ttl=600)
 def carregar_dados_completos():
-    # --- Autenticação Segura ---
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive.readonly"
@@ -98,7 +91,6 @@ def carregar_dados_completos():
         st.error(f"Erro ao abrir planilha: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
-    # --- Nomes das Abas ---
     nome_aba_dados = "Total BaseCamp para Notas" 
     nome_aba_equipes = "Equipes"
     nome_aba_pontuacao = "Notas"
@@ -107,7 +99,6 @@ def carregar_dados_completos():
     nome_aba_source = "Total BaseCamp"
     nome_aba_historico = "HistoricoDiario"
     
-    # Inicializa DataFrames vazios
     df_dados = pd.DataFrame()
     df_equipe = pd.DataFrame()
     df_notas_tabela1 = pd.DataFrame()
@@ -119,7 +110,6 @@ def carregar_dados_completos():
     df_historico = pd.DataFrame()
 
     try:
-        # --- Carregar Abas ---
         try: df_dados = pd.DataFrame(spreadsheet.worksheet(nome_aba_dados).get_all_records())
         except: pass
         try: df_equipe = pd.DataFrame(spreadsheet.worksheet(nome_aba_equipes).get_all_records()) 
@@ -133,12 +123,8 @@ def carregar_dados_completos():
         try: df_historico = pd.DataFrame(spreadsheet.worksheet(nome_aba_historico).get_all_records())
         except: pass 
 
-        # ==============================================================================
-        # --- Carregar AMBAS as tabelas da aba "Notas" ---
-        # ==============================================================================
         try:
             all_values_notas = spreadsheet.worksheet(nome_aba_pontuacao).get_all_values()
-            
             primeira_linha_branca_index = -1
             for i, row in enumerate(all_values_notas):
                 if not row or all(cell == '' for cell in row):
@@ -150,13 +136,11 @@ def carregar_dados_completos():
                 dados_tabela_inferior = [] 
             else:
                 dados_tabela_superior = all_values_notas[:primeira_linha_branca_index]
-                
                 dados_tabela_inferior_inicio = -1
                 for i, row in enumerate(all_values_notas[primeira_linha_branca_index + 1:], start=primeira_linha_branca_index + 1):
                     if row and any(cell != '' for cell in row):
                         dados_tabela_inferior_inicio = i
                         break
-                
                 if dados_tabela_inferior_inicio != -1:
                     dados_tabela_inferior = all_values_notas[dados_tabela_inferior_inicio:]
                 else:
@@ -181,18 +165,18 @@ def carregar_dados_completos():
     if not df_equipe.empty and 'Status' in df_equipe.columns:
         df_equipe.rename(columns={'Status': 'Status_Funcionario'}, inplace=True)
 
-    # --- PREPARAÇÃO DOS DADOS (df_analise) ---
+    for df_temp in [df_dados, df_equipe, df_lideranca, df_backlog, df_source, df_historico]:
+            if not df_temp.empty:
+                df_temp.columns = df_temp.columns.astype(str).str.strip()
+
     df_grafico = df_dados.copy()
-    
     colunas_para_numerico = ['Pablo', 'Leonardo', 'Itiel', 'Ítalo']
     for col in colunas_para_numerico:
         if col not in df_grafico.columns: df_grafico[col] = 0
         else: df_grafico[col] = pd.to_numeric(df_grafico[col], errors='coerce').fillna(0)
 
-    # --- APLICAÇÃO DA CONVERSÃO ROBUSTA DE DATAS (INICIAL E FINAL) ---
     if 'Data Inicial' in df_grafico.columns:
         df_grafico['Data Inicial'] = converter_data_robusta(df_grafico['Data Inicial'])
-    
     if 'Data Final' in df_grafico.columns:
         df_grafico['Data Final'] = converter_data_robusta(df_grafico['Data Final'])
         df_grafico['Status_Tarefa'] = np.where(df_grafico['Data Final'].isnull(), 'Aberto', 'Executado')
@@ -215,10 +199,8 @@ def carregar_dados_completos():
         val_min = df_grafico['Data Inicial'].min()
         if pd.notna(val_min): data_inicio_analise = val_min
     
-    # Extender calendário
     data_fim_analise = pd.Timestamp.now().normalize() + pd.Timedelta(days=365)
     
-    # --- Tabela Calendário ---
     data_inicio_calendario = data_inicio_analise
     if not df_source.empty and 'Data Inicial' in df_source.columns:
         data_inicio_source = converter_data_robusta(df_source['Data Inicial']).min()
@@ -252,7 +234,6 @@ def carregar_dados_completos():
         df_analise = df_analise_temp
         df_analise['Status_Funcionario'] = 'Outros'
     
-    # --- PREPARAÇÃO DOS DADOS (df_source_analise) ---
     if not df_source.empty:
         df_source_proc = df_source.copy()
         if 'Data Inicial' in df_source_proc.columns:
@@ -265,7 +246,6 @@ def carregar_dados_completos():
         if 'Encarregado' in df_source_proc.columns: df_source_proc['Encarregado'] = df_source_proc['Encarregado'].astype(str).str.strip().replace('', 'Em Branco')
         if 'Nome Task' in df_source_proc.columns: df_source_proc['Nome Task'] = df_source_proc['Nome Task'].astype(str).str.strip().replace('', 'Vazio')
         
-        # Merge seguro
         if 'Data Final (aberta)' in df_source_proc.columns:
             df_source_analise = pd.merge(df_source_proc, tabela_calendario, how='left', left_on='Data Final (aberta)', right_on='Date')
             if 'Date' in df_source_analise.columns: df_source_analise = df_source_analise.drop(columns=['Date'])
@@ -276,7 +256,6 @@ def carregar_dados_completos():
             df_source_analise = pd.merge(df_source_analise, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
             if 'Status_Funcionario' in df_source_analise.columns: df_source_analise['Status_Funcionario'].fillna('Outros', inplace=True)
     
-    # --- PREPARAÇÃO DOS DADOS (df_backlog) ---
     if not df_backlog.empty:
         if 'Data Inicial' in df_backlog.columns:
             df_backlog['Data Inicial'] = converter_data_robusta(df_backlog.get('Data Inicial', pd.Series()))
@@ -293,7 +272,6 @@ def carregar_dados_completos():
         else:
             df_backlog['Status_Funcionario'] = 'Outros'
 
-    # --- PREPARAÇÃO DOS DADOS (df_historico) ---
     if not df_historico.empty:
         if 'Data Final' in df_historico.columns: df_historico.rename(columns={'Data Final': 'Data'}, inplace=True)
         if 'Data' in df_historico.columns:
@@ -301,16 +279,22 @@ def carregar_dados_completos():
             if 'Total_Fechadas' in df_historico.columns: df_historico['Total_Fechadas'] = pd.to_numeric(df_historico['Total_Fechadas'], errors='coerce').fillna(0)
             if 'Total_Tarefas' in df_historico.columns: df_historico['Total_Tarefas'] = pd.to_numeric(df_historico['Total_Tarefas'], errors='coerce').fillna(0)
             df_historico.dropna(subset=['Data'], inplace=True)
+    
+    if not df_analise.empty:
+        if 'Data Inicial' in df_analise.columns: df_analise['Data Inicial'] = df_analise['Data Inicial'].dt.date
+        if 'Data Final' in df_analise.columns: df_analise['Data Final'] = df_analise['Data Final'].dt.date
+            
+    if not df_backlog.empty:
+        if 'Data Inicial' in df_backlog.columns: df_backlog['Data Inicial'] = df_backlog['Data Inicial'].dt.date
+        if 'Data Final' in df_backlog.columns: df_backlog['Data Final'] = df_backlog['Data Final'].dt.date
 
     return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe, df_backlog, df_source_analise, df_historico
 
 # ==============================================================================
-# FUNÇÕES GRÁFICAS ESTRUTURADAS
+# FUNÇÕES GRÁFICAS
 # ==============================================================================
 def criar_grafico_historico_semanal(df_historico, semana_selecionada_str=None):
-    if df_historico is None or df_historico.empty:
-        return go.Figure().update_layout(title="Sem dados históricos", template='plotly_white'), None
-
+    if df_historico is None or df_historico.empty: return go.Figure().update_layout(title="Sem dados históricos", template='plotly_white'), None
     if semana_selecionada_str:
         try:
             data_referencia = pd.to_datetime(semana_selecionada_str, format='%d/%m/%Y')
@@ -318,28 +302,21 @@ def criar_grafico_historico_semanal(df_historico, semana_selecionada_str=None):
             inicio_semana = fim_semana - pd.Timedelta(days=4)
             titulo_grafico = f"<b>Progresso ({inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')})</b>"
         except ValueError:
-            titulo_grafico = "Erro na Data"
-            inicio_semana = pd.Timestamp.min; fim_semana = pd.Timestamp.max
+            titulo_grafico = "Erro na Data"; inicio_semana = pd.Timestamp.min; fim_semana = pd.Timestamp.max
     else:
-        inicio_semana = pd.Timestamp.min; fim_semana = pd.Timestamp.max
-        titulo_grafico = "Selecione uma semana"
+        inicio_semana = pd.Timestamp.min; fim_semana = pd.Timestamp.max; titulo_grafico = "Selecione uma semana"
 
     df_filt = df_historico[(df_historico['Data'] >= inicio_semana) & (df_historico['Data'] <= fim_semana)].sort_values('Data')
-    
-    if df_filt.empty:
-        return go.Figure().update_layout(title=f"{titulo_grafico}<br><i>Sem registros diários para esta semana.</i>", template='plotly_white'), None
+    if df_filt.empty: return go.Figure().update_layout(title=f"{titulo_grafico}<br><i>Sem registros diários.</i>", template='plotly_white'), None
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_filt['Data'], y=df_filt['Total_Tarefas'], mode='lines+markers+text', name='Total', line=dict(color='red', width=3), text=df_filt['Total_Tarefas'], textposition='top center'))
     fig.add_trace(go.Scatter(x=df_filt['Data'], y=df_filt['Total_Fechadas'], mode='lines+markers+text', name='Fechadas', line=dict(color='green', width=3), text=df_filt['Total_Fechadas'], textposition='bottom center'))
     fig.update_layout(title=titulo_grafico, template='plotly_white', legend=dict(orientation="h", y=1.1))
-    
     range_semana = pd.date_range(start=inicio_semana, end=fim_semana)
     dias_pt = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex']
-    tick_vals = range_semana
     tick_text = [f"{dias_pt[d.dayofweek]} ({d.strftime('%d/%m')})" for d in range_semana]
-    fig.update_xaxes(tickmode='array', tickvals=tick_vals, ticktext=tick_text)
-    
+    fig.update_xaxes(tickmode='array', tickvals=range_semana, ticktext=tick_text)
     return fig, df_filt.iloc[-1]
 
 def criar_grafico_historico_mensal(df_historico):
@@ -355,14 +332,12 @@ def criar_grafico_historico_mensal(df_historico):
     df_c['Backlog'] = df_c['Total_Tarefas'] - df_c['Total_Fechadas']
     df_c['Mensal_Tarefas'] = df_c['Mensal_Fechadas'] + df_c['Backlog']
 
-    # Tradução do mês para o título do gráfico
     meses_full = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
     nome_mes_pt = meses_full.get(inicio.month, inicio.strftime('%B')).lower()
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_c['Data'], y=df_c['Mensal_Tarefas'], name='Total (Mês)', mode='lines+markers', line=dict(color='red')))
     fig.add_trace(go.Scatter(x=df_c['Data'], y=df_c['Mensal_Fechadas'], name='Fechadas (Mês)', mode='lines+markers', line=dict(color='green')))
-    
     fig.update_layout(title=f"<b>Evolução Diária ({nome_mes_pt})</b>", template='plotly_white', legend=dict(orientation="h", y=1.1))
     fig.update_xaxes(tickformat="%d/%m")
     return fig, df_c.iloc[-1]
@@ -371,64 +346,55 @@ def criar_grafico_produtividade_mensal(df):
     if df.empty: return go.Figure()
     agg = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev']).agg(qtd=('ID', 'count')).reset_index().sort_values('Ano-Mês')
     fig = px.bar(agg, x='Mes_Ano_Abrev', y='qtd', text='qtd', title="<b>Produtividade Mensal</b>")
-    fig.update_layout(template='plotly_white')
+    fig.update_layout(template='plotly_white', margin=dict(l=50, r=50, t=40, b=40))
     return fig
 
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
-    
     ordem_dias = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
-    
     df_dia = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']).size().reset_index(name='Contagem')
     df_dia_total = df_dia.groupby('Dia')['Contagem'].sum().reset_index()
-    
     df_semana = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']).size().reset_index(name='Contagem')
     df_semana_total = df_semana.groupby('Semana do Mês')['Contagem'].sum().reset_index()
-
     df_diasemana_full = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Nome Dia Semana']).size().reset_index(name='Contagem')
-    
     df_diasemana_total = df_diasemana_full.groupby('Nome Dia Semana')['Contagem'].sum().reindex(ordem_dias).fillna(0).reset_index()
     df_diasemana_total['Contagem'] = recortar_zeros_pontas(df_diasemana_total['Contagem'])
     df_diasemana_total = df_diasemana_total.dropna(subset=['Contagem'])
-
     mes_map = df[['Ano-Mês', 'Mes_Ano_Abrev']].drop_duplicates().sort_values('Ano-Mês')
     opcoes_meses = mes_map['Mes_Ano_Abrev'].tolist()
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_dia_total['Dia'], y=df_dia_total['Contagem'], name='Soma (Dias)', visible=True, mode='lines+markers+text', text=df_dia_total['Contagem'],textposition='top center', line=dict(color='royalblue', width=3))) 
-    fig.add_trace(go.Scatter(x=df_semana_total['Semana do Mês'], y=df_semana_total['Contagem'], name='Soma (Semanas)', visible=False, mode='lines+markers+text', text=df_semana_total['Contagem'], line=dict(color='royalblue', width=3))) 
-    fig.add_trace(go.Scatter(x=df_diasemana_total['Nome Dia Semana'], y=df_diasemana_total['Contagem'], name='Soma (Dia Semana)', visible=False, mode='lines+markers+text', text=df_diasemana_total['Contagem'], line=dict(color='royalblue', width=3))) 
+    fig.add_trace(go.Scatter(x=df_dia_total['Dia'], y=df_dia_total['Contagem'], name='Soma (Dias)', visible=True, mode='lines+markers+text', text=df_dia_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
+    fig.add_trace(go.Scatter(x=df_semana_total['Semana do Mês'], y=df_semana_total['Contagem'], name='Soma (Semanas)', visible=False, mode='lines+markers+text', text=df_semana_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
+    fig.add_trace(go.Scatter(x=df_diasemana_total['Nome Dia Semana'], y=df_diasemana_total['Contagem'], name='Soma (Dia Semana)', visible=False, mode='lines+markers+text', text=df_diasemana_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
     
     offset_dia = 3
     for mes in opcoes_meses:
         d = df_dia[df_dia['Mes_Ano_Abrev'] == mes].sort_values('Dia')
         d['Contagem'] = d['Contagem'].replace(0, np.nan)
-        fig.add_trace(go.Scatter(x=d['Dia'], y=d['Contagem'], name=mes, visible=False, mode='lines+markers+text', text=d['Contagem']))
+        fig.add_trace(go.Scatter(x=d['Dia'], y=d['Contagem'], name=mes, visible=False, mode='lines+markers+text', text=d['Contagem'], textposition='top center'))
     count_dia = len(opcoes_meses)
 
     offset_semana = offset_dia + count_dia
     for mes in opcoes_meses:
         d = df_semana[df_semana['Mes_Ano_Abrev'] == mes].sort_values('Semana do Mês')
         d['Contagem'] = d['Contagem'].replace(0, np.nan)
-        fig.add_trace(go.Scatter(x=d['Semana do Mês'], y=d['Contagem'], name=mes, visible=False, mode='lines+markers+text', text=d['Contagem']))
+        fig.add_trace(go.Scatter(x=d['Semana do Mês'], y=d['Contagem'], name=mes, visible=False, mode='lines+markers+text', text=d['Contagem'], textposition='top center'))
     count_semana = len(opcoes_meses)
 
     offset_diasemana = offset_semana + count_semana
     diasemana_trace_map = [] 
-    
     for mes in opcoes_meses:
         d_mes = df_diasemana_full[df_diasemana_full['Mes_Ano_Abrev'] == mes].groupby('Nome Dia Semana')['Contagem'].sum().reindex(ordem_dias).fillna(0).reset_index()
         d_mes['Contagem'] = recortar_zeros_pontas(d_mes['Contagem'])
         d_mes = d_mes.dropna(subset=['Contagem'])
-        fig.add_trace(go.Scatter(x=d_mes['Nome Dia Semana'], y=d_mes['Contagem'], name=f"{mes} Agregado", visible=False, mode='lines+markers+text', text=d_mes['Contagem']))
-        
+        fig.add_trace(go.Scatter(x=d_mes['Nome Dia Semana'], y=d_mes['Contagem'], name=f"{mes} Agregado", visible=False, mode='lines+markers+text', text=d_mes['Contagem'], textposition='top center'))
         semanas_do_mes = sorted(df_diasemana_full[df_diasemana_full['Mes_Ano_Abrev'] == mes]['Semana do Mês'].unique())
         for sem in semanas_do_mes:
             d_sem = df_diasemana_full[(df_diasemana_full['Mes_Ano_Abrev'] == mes) & (df_diasemana_full['Semana do Mês'] == sem)].set_index('Nome Dia Semana').reindex(ordem_dias).fillna(0).reset_index()
             d_sem['Contagem'] = recortar_zeros_pontas(d_sem['Contagem'])
             d_sem = d_sem.dropna(subset=['Contagem'])
-            fig.add_trace(go.Scatter(x=d_sem['Nome Dia Semana'], y=d_sem['Contagem'], name=f"{mes} Sem {sem}", visible=False, mode='lines+markers+text', text=d_sem['Contagem']))
-        
+            fig.add_trace(go.Scatter(x=d_sem['Nome Dia Semana'], y=d_sem['Contagem'], name=f"{mes} Sem {sem}", visible=False, mode='lines+markers+text', text=d_sem['Contagem'], textposition='top center'))
         diasemana_trace_map.append({'mes': mes, 'num_semanas': len(semanas_do_mes)})
 
     total_traces = len(fig.data)
@@ -470,21 +436,21 @@ def criar_grafico_principal(df):
     vis_init_diasemana = [False]*total_traces; vis_init_diasemana[2] = True
 
     fig.update_layout(
+        title={'text': "<b>Gráfico Principal</b>", 'y': 0.98, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
+        height=600,
+        margin=dict(l=50, r=50, t=120, b=50),
+        template='plotly_white',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         updatemenus=[
-            dict(type="buttons", direction="right", x=0.99, y=1.18, buttons=[
+            dict(type="buttons", direction="right", x=1.0, y=1.2, xanchor="right", yanchor="top", buttons=[
                 dict(label="Dia do Mês", method="update", args=[{"visible": vis_init_dia}, {"updatemenus[1].buttons": buttons_dia, "xaxis.title": "Dia", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
                 dict(label="Semana do Mês", method="update", args=[{"visible": vis_init_semana}, {"updatemenus[1].buttons": buttons_semana, "xaxis.title": "Semana", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
                 dict(label="Dia da Semana", method="update", args=[{"visible": vis_init_diasemana}, {"updatemenus[1].buttons": buttons_diasemana, "xaxis.title": "Dia da Semana", "xaxis.type": "category", "xaxis.categoryorder": "array", "xaxis.categoryarray": ordem_dias}])
             ]),
-            dict(direction="down", x=-0.03, y=1.18,xanchor="left",yanchor="top", showactive=True, buttons=buttons_dia)
+            dict(direction="down", x=0.0, y=1.2, xanchor="left", yanchor="top", showactive=True, buttons=buttons_dia)
         ],
-        title={
-            'text': "<b>Gráfico Principal</b>",
-            'y': 0.9, # Posição Vertical ajustada
-            'x': 0,
-            'xanchor': 'left',
-            'yanchor': 'top'
-        }, margin=dict(t=116), template='plotly_white'
+        xaxis=dict(title="Tempo", showgrid=False, showline=True, linecolor='black'),
+        yaxis=dict(title="Quantidade", showgrid=True, gridcolor='lightgray')
     )
     return fig
 
@@ -495,17 +461,79 @@ def criar_grafico_tarefas_funcionarios(df):
     fig.update_layout(template='plotly_white', yaxis_categoryorder='total ascending')
     return fig
 
-# --- ALTERAÇÃO AQUI: Gráfico de Status com contagem e porcentagem ---
 def criar_grafico_status_tarefas(df):
     if df.empty: return go.Figure().update_layout(title="<b>Distribuição por Status</b>")
     v = df['Status_Tarefa'].value_counts().reset_index()
     v.columns = ['Status', 'Contagem']
-    # Cores definidas
     fig = px.pie(v, names='Status', values='Contagem', title="<b>Distribuição por Status</b>", hole=0.4, 
                  color='Status', 
                  color_discrete_map={'Executado': 'royalblue', 'Aberto': 'firebrick', 'Desconhecido': 'gray'})
-    # Exibe valor e porcentagem
     fig.update_traces(textinfo='value+percent')
+    return fig
+
+# --- NOVO GRÁFICO DE CRESCIMENTO (PRODUTIVIDADE) ---
+def criar_grafico_crescimento_acumulado(df, lista_encarregados):
+    if df.empty or not lista_encarregados:
+        return go.Figure().update_layout(title="Sem dados ou nenhum encarregado selecionado", template='plotly_white')
+    
+    # Filtra apenas tarefas executadas
+    df_ex = df[df['Status_Tarefa'] == 'Executado'].copy()
+    if df_ex.empty:
+        return go.Figure().update_layout(title="Nenhuma tarefa executada no período", template='plotly_white')
+
+    # Garante data (removendo horas)
+    df_ex['Data'] = pd.to_datetime(df_ex['Data Final (aberta)']).dt.date
+    
+    # Define timeline (do menor dia até o maior dia dos dados filtrados)
+    d_min = df_ex['Data'].min()
+    d_max = df_ex['Data'].max()
+    if pd.isna(d_min) or pd.isna(d_max): return go.Figure()
+
+    idx = pd.date_range(d_min, d_max)
+    
+    fig = go.Figure()
+    
+    # 1. Linha de Total Geral (Soma de todos os filtrados, independente da seleção)
+    s_total = df_ex.groupby('Data').size()
+    s_total.index = pd.to_datetime(s_total.index)
+    s_total = s_total.reindex(idx, fill_value=0).cumsum()
+    
+    fig.add_trace(go.Scatter(
+        x=s_total.index, 
+        y=s_total.values, 
+        name='Total Geral', 
+        line=dict(color='black', width=4, dash='dot'),
+        mode='lines'
+    ))
+    
+    # 2. Linhas Individuais (Apenas selecionados)
+    # Paleta de cores segura
+    colors = px.colors.qualitative.Plotly
+    
+    for i, nome in enumerate(lista_encarregados):
+        df_u = df_ex[df_ex['Encarregado'] == nome]
+        if df_u.empty: continue
+        
+        s_u = df_u.groupby('Data').size()
+        s_u.index = pd.to_datetime(s_u.index)
+        s_u = s_u.reindex(idx, fill_value=0).cumsum()
+        
+        c = colors[i % len(colors)]
+        fig.add_trace(go.Scatter(
+            x=s_u.index, 
+            y=s_u.values, 
+            name=nome, 
+            mode='lines+markers',
+            line=dict(color=c, width=2)
+        ))
+        
+    fig.update_layout(
+        title="<b>Curva de Produtividade Acumulada (Entregas)</b>",
+        template='plotly_white',
+        xaxis=dict(title="Tempo"),
+        yaxis=dict(title="Tarefas Entregues (Acumulado)"),
+        hovermode="x unified"
+    )
     return fig
 
 # --- GRÁFICOS DE PONTUAÇÃO ---
@@ -582,10 +610,8 @@ def criar_grafico_pontuacao_combinada(df_ind, df_lid, df_mapa, nomes, d_ini, d_f
 st.title("Dashboard de Produtividade")
 df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, df_equipe, df_backlog, df_source_analise, df_historico = carregar_dados_completos()
 
-# --- DATAS GLOBAIS ---
 all_dates = []
 if df_analise is not None and not df_analise.empty:
-    # CORREÇÃO: Converter para .dt.date para garantir compatibilidade com o slider e evitar erro de Timestamp vs Date
     if 'Data Final (aberta)' in df_analise.columns:
         all_dates.extend(pd.to_datetime(df_analise['Data Final (aberta)']).dt.date.dropna().tolist())
 
@@ -599,7 +625,6 @@ if all_dates:
 else:
     min_date, max_date = date.today(), date.today()
 
-# --- BARRA LATERAL ---
 if 'filtros_iniciados' not in st.session_state:
     st.session_state.encarregado_filtro = ["Todos"]
     st.session_state.contrato_filtro = "Todos"
@@ -623,7 +648,6 @@ with st.sidebar:
         st.selectbox("Status Tarefa", l_st_tar, key='status_tarefa_filtro')
     st.button("Limpar", on_click=limpar)
 
-# --- FILTRAGEM ---
 df_f = df_analise.copy() if df_analise is not None else pd.DataFrame()
 if not df_f.empty:
     if "Todos" not in st.session_state.encarregado_filtro: df_f = df_f[df_f['Encarregado'].isin(st.session_state.encarregado_filtro)]
@@ -639,14 +663,13 @@ with c3:
 
 if st.session_state.semana_filtro != "Todos": df_f = df_f[df_f['Semana do Mês'] == st.session_state.semana_filtro]
 d_ini, d_fim = st.session_state.date_slider
-# FIX: Comparação de datas segura (Date vs Date)
 if not df_f.empty: df_f = df_f[(df_f['Data Final (aberta)'].dt.date >= d_ini) & (df_f['Data Final (aberta)'].dt.date <= d_fim)]
 
 with c2: st.metric("Total Tarefas", len(df_f))
 st.divider()
 
-# --- ABAS ---
-t1, t2, t3, t4, t5 = st.tabs(["Semana", "Mês", "Backlog", "Geral", "Pontuação"])
+# --- ORDEM DE ABAS: Produtividade é a 3ª ---
+t1, t2, t3, t4, t5, t6 = st.tabs(["Semana", "Mês", "Produtividade", "Backlog", "Geral", "Pontuação"])
 
 with t1: # SEMANA
     set_semanas = set()
@@ -664,11 +687,9 @@ with t1: # SEMANA
         fridays = dates - pd.to_timedelta(dates.dt.dayofweek, unit='d') + pd.to_timedelta(4, unit='d')
         set_semanas.update(fridays.unique())
 
-    # ORDENAÇÃO REVERSA (MAIS NOVAS PRIMEIRO)
     lista_semanas = sorted([d for d in list(set_semanas) if pd.notnull(d)], reverse=True)
     lista_str = [d.strftime('%d/%m/%Y') for d in lista_semanas]
     
-    # LÓGICA DE SELEÇÃO PADRÃO: Tenta a sexta atual ou a mais próxima no passado
     idx_padrao = 0
     sexta_atual_str = sexta_atual.strftime('%d/%m/%Y')
     if sexta_atual_str in lista_str:
@@ -679,15 +700,11 @@ with t1: # SEMANA
                 idx_padrao = i; break
     
     sem_sel = st.selectbox("Semana (Sexta-feira referência):", lista_str, index=idx_padrao)
-    
     dt_sel = pd.to_datetime(sem_sel, dayfirst=True)
-    
-    # Cálculo do intervalo da semana para exibição
     d_seg = dt_sel - pd.Timedelta(days=4)
     d_dom = dt_sel + pd.Timedelta(days=2)
     str_periodo = f"({d_seg.strftime('%d/%m')} a {d_dom.strftime('%d/%m')})"
 
-    # ALTERAÇÃO 1: Título do Gráfico atualizado
     st.subheader(f"Progresso da Semana {str_periodo}")
     
     fig_h, last_h = criar_grafico_historico_semanal(df_historico, sem_sel)
@@ -696,7 +713,6 @@ with t1: # SEMANA
         c_m1.metric("Total", last_h['Total_Tarefas']); c_m2.metric("Abertas", last_h['Total_Tarefas']-last_h['Total_Fechadas']); c_m3.metric("Fechadas", last_h['Total_Fechadas'])
     st.plotly_chart(fig_h, use_container_width=True)
     
-    dt_sel = pd.to_datetime(sem_sel, dayfirst=True)
     if not df_f.empty:
         dates_f = pd.to_datetime(df_f['Data Final (aberta)'])
         fridays_f = dates_f - pd.to_timedelta(dates_f.dt.dayofweek, unit='d') + pd.to_timedelta(4, unit='d')
@@ -704,11 +720,8 @@ with t1: # SEMANA
         
         if not df_sem.empty:
             piv = pd.pivot_table(df_sem[df_sem['Status_Tarefa']=='Executado'], index='Encarregado', columns='Nome Dia Semana', values='ID', aggfunc='count', fill_value=0)
-            # Ordenar colunas cronologicamente
             ordem_dias = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
             piv = piv.reindex(columns=ordem_dias, fill_value=0)
-            
-            # ALTERAÇÃO 2: Adicionado título acima da tabela
             st.subheader("Resumo da Semana")
             st.dataframe(aplicar_heatmap_vermelho(piv), use_container_width=True)
         
@@ -720,13 +733,11 @@ with t1: # SEMANA
             ab = d_e[d_e['Status_Tarefa']=='Aberto']
             fe = d_e[d_e['Status_Tarefa']=='Executado']
             with st.expander(f"{enc} ({len(d_e)}) - 🔴 {len(ab)} | 🟢 {len(fe)}"):
-                # CONFIGURAÇÃO DE COLUNAS PARA EXIBIR CORRETAMENTE AS DATAS
                 column_config_semana = {
                     "Link": st.column_config.LinkColumn("Link", display_text="Abrir ↗"),
                     "Data Inicial": st.column_config.DateColumn("Data Inicial", format="DD/MM/YYYY"),
                     "Data Final": st.column_config.DateColumn("Data Final", format="DD/MM/YYYY")
                 }
-                
                 if not ab.empty: 
                     st.caption("Abertas")
                     st.dataframe(ab[['Nome Task','Data Inicial', 'Link']], use_container_width=True, hide_index=True, column_config=column_config_semana)
@@ -735,22 +746,18 @@ with t1: # SEMANA
                     st.dataframe(fe[['Nome Task','Data Final', 'Link']], use_container_width=True, hide_index=True, column_config=column_config_semana)
 
 with t2: # MÊS
-    fig_hm, last_hm = criar_grafico_historico_mensal(df_historico)
-    
-    # Tradução do mês atual para o cabeçalho
-    hoje_ref = pd.Timestamp.now()
+    hj = pd.Timestamp.now().normalize()
     meses_full_header = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
-    nome_mes_header = meses_full_header.get(hoje_ref.month, '').lower()
+    nome_mes_header = meses_full_header.get(hj.month, '').lower()
 
-    # ALTERAÇÃO 1: Título acima dos valores totais
     st.markdown(f"### Progresso do Mês ({nome_mes_header})")
 
+    fig_hm, last_hm = criar_grafico_historico_mensal(df_historico)
     if last_hm is not None:
         col_met_m1, col_met_m2, col_met_m3 = st.columns(3)
         col_met_m1.metric("Total Acumulado", f"{last_hm['Mensal_Tarefas']:.0f}")
         col_met_m2.metric("🔴 Gap (Abertas)", f"{last_hm['Mensal_Tarefas'] - last_hm['Mensal_Fechadas']:.0f}")
         col_met_m3.metric("🟢 Fechadas", f"{last_hm['Mensal_Fechadas']:.0f}")
-
     st.plotly_chart(fig_hm, use_container_width=True)
     
     ini_m = hj.replace(day=1); fim_m = (ini_m + pd.DateOffset(months=1)) - pd.Timedelta(days=1)
@@ -758,45 +765,74 @@ with t2: # MÊS
         df_m = df_f[(df_f['Data Final (aberta)'] >= ini_m) & (df_f['Data Final (aberta)'] <= fim_m)]
         if not df_m.empty:
             piv = pd.pivot_table(df_m[df_m['Status_Tarefa']=='Executado'], index='Encarregado', columns=df_m['Data Final (aberta)'].dt.day, values='ID', aggfunc='count', fill_value=0)
-            
             st.subheader("Resumo do Mês")
             st.dataframe(aplicar_heatmap_vermelho(piv), use_container_width=True)
             
             st.markdown("---")
             st.subheader("Detalhes do Mês")
 
-            # Configuração de colunas para o Mês
             column_config_mes = {
                 "Link": st.column_config.LinkColumn("Link", display_text="Abrir ↗"),
                 "Data Inicial": st.column_config.DateColumn("Data Inicial", format="DD/MM/YYYY"),
                 "Data Final": st.column_config.DateColumn("Data Final", format="DD/MM/YYYY")
             }
             
-            # ALTERAÇÃO 2: Lista detalhada com contagem de Abertas/Fechadas
             for enc in sorted(df_m['Encarregado'].unique()):
                 d_e = df_m[df_m['Encarregado'] == enc]
-                
-                # Separa abertas e fechadas dentro do escopo do mês
                 ab = d_e[d_e['Status_Tarefa'] == 'Aberto'].sort_values(by='Data Inicial', ascending=True)
                 fe = d_e[d_e['Status_Tarefa'] == 'Executado'].sort_values(by='Data Final', ascending=True)
                 
-                count_total = len(d_e)
-                count_ab = len(ab)
-                count_fe = len(fe)
+                count_ab = len(ab); count_fe = len(fe); count_total = count_ab + count_fe
 
                 with st.expander(f"{enc} ({count_total}) - 🔴 {count_ab} | 🟢 {count_fe}"):
                     if not ab.empty:
-                        st.caption("🔴 Abertas (Iniciadas neste mês)")
+                        st.caption("🔴 Abertas")
                         st.dataframe(ab[['Nome Task', 'Data Inicial', 'Link']], use_container_width=True, hide_index=True, column_config=column_config_mes)
-                    
                     if not fe.empty:
-                        st.caption("🟢 Fechadas (Neste mês)")
+                        st.caption("🟢 Fechadas")
                         st.dataframe(fe[['Nome Task', 'Data Final', 'Link']], use_container_width=True, hide_index=True, column_config=column_config_mes)
-                    
-                    if ab.empty and fe.empty:
-                        st.text("Sem tarefas registradas para este período.")
 
-with t3: # BACKLOG
+with t3: # PRODUTIVIDADE (Movida para 3ª posição)
+    st.header("Curva de Produtividade (Acumulada)")
+    
+    if not df_f.empty and 'Data Final (aberta)' in df_f.columns:
+        df_f['Periodo_Mes'] = df_f['Data Final (aberta)'].dt.to_period('M')
+        periodos_unicos = sorted(df_f['Periodo_Mes'].dropna().unique(), reverse=True)
+        
+        if not periodos_unicos:
+            st.info("Não há datas válidas para gerar a lista de meses.")
+        else:
+            meses_full_prod = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Jun', 7: 'Jul', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+            opcoes_formatadas = [f"{meses_full_prod[p.month]} {p.year}" for p in periodos_unicos]
+            
+            hj_periodo = pd.Timestamp.now().to_period('M')
+            idx_default = 0
+            if hj_periodo in periodos_unicos:
+                idx_default = periodos_unicos.index(hj_periodo)
+                
+            sel_mes_str = st.selectbox("Selecione o Mês de Referência:", opcoes_formatadas, index=idx_default)
+            idx_sel = opcoes_formatadas.index(sel_mes_str)
+            periodo_selecionado = periodos_unicos[idx_sel]
+            
+            df_prod_mes = df_f[df_f['Periodo_Mes'] == periodo_selecionado].copy()
+            todos_enc = sorted(df_prod_mes['Encarregado'].unique())
+            
+            sel_enc_prod = st.multiselect(
+                "Selecione Encarregados para Comparar:", 
+                options=todos_enc,
+                default=todos_enc # SELEÇÃO PADRÃO: TODOS
+            )
+            
+            if not df_prod_mes.empty:
+                st.caption(f"Exibindo crescimento diário para: **{sel_mes_str}**")
+                fig_cresc = criar_grafico_crescimento_acumulado(df_prod_mes, sel_enc_prod)
+                st.plotly_chart(fig_cresc, use_container_width=True)
+            else:
+                st.info(f"Sem dados de tarefas executadas para {sel_mes_str} com os filtros atuais.")
+    else:
+        st.info("Sem dados de tarefas disponíveis para gerar a curva de produtividade.")
+
+with t4: # BACKLOG (Movido para 4ª)
     if df_backlog is not None and not df_backlog.empty:
         bk = df_backlog.copy()
         if "Todos" not in st.session_state.encarregado_filtro: bk = bk[bk['Encarregado'].isin(st.session_state.encarregado_filtro + ['Em Branco'])]
@@ -804,39 +840,33 @@ with t3: # BACKLOG
         com_dono = bk[(bk['Status_Backlog']=='Aberto') & (bk['Encarregado']!='Em Branco')]
         fechado = bk[bk['Status_Backlog']=='Fechado']
         
-        # Configuração de colunas para o Backlog
         column_config_backlog = {
             "Link": st.column_config.LinkColumn("Tarefa Link", display_text="Abrir ↗"),
             "Lista": st.column_config.LinkColumn("Lista Link", display_text="Abrir ↗"),
             "Data Inicial": st.column_config.DateColumn("Data Inicial", format="DD/MM/YYYY"),
             "Data Final": st.column_config.DateColumn("Data Final", format="DD/MM/YYYY")
         }
-        
-        # Seleção de colunas existentes para evitar erros
         cols_bk = ['Nome Task', 'Data Inicial', 'Data Final', 'Link']
-        # Se 'Lista' existir, adiciona
         if 'Lista' in bk.columns: cols_bk.insert(1, 'Lista')
         
         with st.expander(f"⚫ Sem Dono ({len(sem_dono)})"): 
             st.dataframe(sem_dono[cols_bk], use_container_width=True, hide_index=True, column_config=column_config_backlog)
-        
         with st.expander(f"🔴 Com Dono ({len(com_dono)})", expanded=True): 
             cols_bk_com_dono = ['Encarregado'] + cols_bk
             st.dataframe(com_dono[cols_bk_com_dono].sort_values('Encarregado'), use_container_width=True, hide_index=True, column_config=column_config_backlog)
-        
         with st.expander(f"🟢 Fechados ({len(fechado)})"): 
             cols_bk_fechado = ['Encarregado'] + cols_bk
             st.dataframe(fechado[cols_bk_fechado].sort_values('Data Final', ascending=False), use_container_width=True, hide_index=True, column_config=column_config_backlog)
 
-with t4: # GERAL
-    c_g1, c_g2 = st.columns(2)
+with t5: # GERAL (Movido para 5ª)
+    c_g1, c_g2 = st.columns(2, gap="small")
     with c_g1: st.plotly_chart(criar_grafico_produtividade_mensal(df_f), use_container_width=True)
     with c_g2: st.plotly_chart(criar_grafico_principal(df_f), use_container_width=True)
     c_g3, c_g4 = st.columns(2)
     with c_g3: st.plotly_chart(criar_grafico_tarefas_funcionarios(df_f), use_container_width=True)
     with c_g4: st.plotly_chart(criar_grafico_status_tarefas(df_f), use_container_width=True)
 
-with t5: # PONTUAÇÃO
+with t6: # PONTUAÇÃO (Movido para 6ª)
     nomes = []
     if df_equipe is not None and not df_equipe.empty:
         if st.session_state.contrato_filtro == "Todos": nomes = df_equipe['Nome'].unique().tolist()
