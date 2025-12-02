@@ -236,10 +236,8 @@ def carregar_dados_completos():
     
     if not df_source.empty:
         df_source_proc = df_source.copy()
-        if 'Data Inicial' in df_source_proc.columns:
-            df_source_proc['Data Inicial'] = converter_data_robusta(df_source_proc.get('Data Inicial', pd.Series()))
-        if 'Data Final' in df_source_proc.columns:
-            df_source_proc['Data Final'] = converter_data_robusta(df_source_proc.get('Data Final', pd.Series()))
+        if 'Data Inicial' in df_source_proc.columns: df_source_proc['Data Inicial'] = converter_data_robusta(df_source_proc.get('Data Inicial', pd.Series()))
+        if 'Data Final' in df_source_proc.columns: df_source_proc['Data Final'] = converter_data_robusta(df_source_proc.get('Data Final', pd.Series()))
         df_source_proc['Status_Tarefa'] = np.where(df_source_proc['Data Final'].isnull(), 'Aberto', 'Executado')
         df_source_proc['Data Final (aberta)'] = df_source_proc['Data Final'].fillna(pd.Timestamp.now().normalize())
         
@@ -257,15 +255,11 @@ def carregar_dados_completos():
             if 'Status_Funcionario' in df_source_analise.columns: df_source_analise['Status_Funcionario'].fillna('Outros', inplace=True)
     
     if not df_backlog.empty:
-        if 'Data Inicial' in df_backlog.columns:
-            df_backlog['Data Inicial'] = converter_data_robusta(df_backlog.get('Data Inicial', pd.Series()))
-        if 'Data Final' in df_backlog.columns:
-            df_backlog['Data Final'] = converter_data_robusta(df_backlog.get('Data Final', pd.Series()))
+        if 'Data Inicial' in df_backlog.columns: df_backlog['Data Inicial'] = converter_data_robusta(df_backlog.get('Data Inicial', pd.Series()))
+        if 'Data Final' in df_backlog.columns: df_backlog['Data Final'] = converter_data_robusta(df_backlog.get('Data Final', pd.Series()))
         df_backlog['Status_Backlog'] = np.where(df_backlog['Data Final'].isnull(), 'Aberto', 'Fechado')
-        
         if 'Encarregado' in df_backlog.columns: df_backlog['Encarregado'] = df_backlog['Encarregado'].astype(str).str.strip().replace('', 'Em Branco') 
         if 'Nome Task' in df_backlog.columns: df_backlog['Nome Task'] = df_backlog['Nome Task'].astype(str).str.strip().replace('', 'Vazio')
-        
         if not df_equipe.empty:
             df_backlog = pd.merge(df_backlog, df_equipe, how='left', left_on='Encarregado', right_on='Nome')
             if 'Status_Funcionario' in df_backlog.columns: df_backlog['Status_Funcionario'].fillna('Outros', inplace=True)
@@ -291,7 +285,7 @@ def carregar_dados_completos():
     return df_analise, df_notas_tabela1, df_notas_tabela2, df_lideranca, df_equipe, df_backlog, df_source_analise, df_historico
 
 # ==============================================================================
-# FUNÇÕES GRÁFICAS
+# FUNÇÕES GRÁFICAS ESTRUTURADAS
 # ==============================================================================
 def criar_grafico_historico_semanal(df_historico, semana_selecionada_str=None):
     if df_historico is None or df_historico.empty: return go.Figure().update_layout(title="Sem dados históricos", template='plotly_white'), None
@@ -319,11 +313,27 @@ def criar_grafico_historico_semanal(df_historico, semana_selecionada_str=None):
     fig.update_xaxes(tickmode='array', tickvals=range_semana, ticktext=tick_text)
     return fig, df_filt.iloc[-1]
 
-def criar_grafico_historico_mensal(df_historico):
+def criar_grafico_historico_mensal(df_historico, data_referencia=None):
     if df_historico is None or df_historico.empty: return go.Figure(), None
-    hoje = pd.Timestamp.now().normalize(); inicio = hoje.replace(day=1); fim = (inicio + pd.DateOffset(months=1)) - pd.Timedelta(days=1)
+    
+    # Se data_referencia não for fornecida (None), usa hoje
+    if data_referencia is None:
+        hoje = pd.Timestamp.now().normalize()
+        inicio = hoje.replace(day=1)
+    else:
+        # Converte para timestamp se necessário e normaliza
+        inicio = pd.Timestamp(data_referencia).normalize().replace(day=1)
+        
+    fim = (inicio + pd.DateOffset(months=1)) - pd.Timedelta(days=1)
+    
     df_mes = df_historico[(df_historico['Data'] >= inicio) & (df_historico['Data'] <= fim)].sort_values('Data')
-    if df_mes.empty: return go.Figure().update_layout(title="Sem dados mês atual", template='plotly_white'), None
+    
+    # Nome do mês para o título (se vazio ou não)
+    meses_full = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+    nome_mes_pt = meses_full.get(inicio.month, inicio.strftime('%B')).lower()
+
+    if df_mes.empty: 
+        return go.Figure().update_layout(title=f"<b>Evolução Diária ({nome_mes_pt})</b> - Sem dados", template='plotly_white'), None
 
     df_c = df_mes.copy()
     df_c['Delta_F'] = df_c['Total_Fechadas'].diff().fillna(df_c['Total_Fechadas'])
@@ -331,9 +341,6 @@ def criar_grafico_historico_mensal(df_historico):
     df_c['Mensal_Fechadas'] = df_c['Delta_F'].cumsum()
     df_c['Backlog'] = df_c['Total_Tarefas'] - df_c['Total_Fechadas']
     df_c['Mensal_Tarefas'] = df_c['Mensal_Fechadas'] + df_c['Backlog']
-
-    meses_full = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
-    nome_mes_pt = meses_full.get(inicio.month, inicio.strftime('%B')).lower()
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_c['Data'], y=df_c['Mensal_Tarefas'], name='Total (Mês)', mode='lines+markers', line=dict(color='red')))
@@ -493,18 +500,23 @@ def criar_grafico_crescimento_acumulado(df, lista_encarregados):
     
     fig = go.Figure()
     
-    # 1. Linha de Total Geral (Soma de todos os filtrados, independente da seleção)
-    s_total = df_ex.groupby('Data').size()
-    s_total.index = pd.to_datetime(s_total.index)
-    s_total = s_total.reindex(idx, fill_value=0).cumsum()
+    # 1. Linha de Média (Total acumulado / Número de Encarregados Ativos)
+    # Conta quantos encarregados únicos existem nos dados filtrados (ativos no período)
+    num_ativos = df_ex['Encarregado'].nunique()
     
-    fig.add_trace(go.Scatter(
-        x=s_total.index, 
-        y=s_total.values, 
-        name='Total Geral', 
-        line=dict(color='black', width=4, dash='dot'),
-        mode='lines'
-    ))
+    if num_ativos > 0:
+        s_total = df_ex.groupby('Data').size()
+        s_total.index = pd.to_datetime(s_total.index)
+        # Acumula e divide pelo número de ativos para ter a média por pessoa
+        s_media = s_total.reindex(idx, fill_value=0).cumsum() / num_ativos
+        
+        fig.add_trace(go.Scatter(
+            x=s_media.index, 
+            y=s_media.values, 
+            name='Média da Equipe', 
+            line=dict(color='black', width=4, dash='dot'),
+            mode='lines'
+        ))
     
     # 2. Linhas Individuais (Apenas selecionados)
     # Paleta de cores segura
@@ -668,7 +680,6 @@ if not df_f.empty: df_f = df_f[(df_f['Data Final (aberta)'].dt.date >= d_ini) & 
 with c2: st.metric("Total Tarefas", len(df_f))
 st.divider()
 
-# --- ORDEM DE ABAS: Produtividade é a 3ª ---
 t1, t2, t3, t4, t5, t6 = st.tabs(["Semana", "Mês", "Produtividade", "Backlog", "Geral", "Pontuação"])
 
 with t1: # SEMANA
@@ -746,23 +757,41 @@ with t1: # SEMANA
                     st.dataframe(fe[['Nome Task','Data Final', 'Link']], use_container_width=True, hide_index=True, column_config=column_config_semana)
 
 with t2: # MÊS
-    hj = pd.Timestamp.now().normalize()
-    meses_full_header = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
-    nome_mes_header = meses_full_header.get(hj.month, '').lower()
+    if not df_f.empty and 'Data Final (aberta)' in df_f.columns:
+        df_f['Periodo_Mes_Ref'] = df_f['Data Final (aberta)'].dt.to_period('M')
+        periodos_unicos_mes = sorted(df_f['Periodo_Mes_Ref'].dropna().unique(), reverse=True)
+        
+        if not periodos_unicos_mes:
+             periodos_unicos_mes = [pd.Timestamp.now().to_period('M')]
 
-    st.markdown(f"### Progresso do Mês ({nome_mes_header})")
+        meses_full_list = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Jun', 7: 'Jul', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+        opcoes_formatadas_mes = [f"{meses_full_list[p.month]} {p.year}" for p in periodos_unicos_mes]
 
-    fig_hm, last_hm = criar_grafico_historico_mensal(df_historico)
-    if last_hm is not None:
-        col_met_m1, col_met_m2, col_met_m3 = st.columns(3)
-        col_met_m1.metric("Total Acumulado", f"{last_hm['Mensal_Tarefas']:.0f}")
-        col_met_m2.metric("🔴 Gap (Abertas)", f"{last_hm['Mensal_Tarefas'] - last_hm['Mensal_Fechadas']:.0f}")
-        col_met_m3.metric("🟢 Fechadas", f"{last_hm['Mensal_Fechadas']:.0f}")
-    st.plotly_chart(fig_hm, use_container_width=True)
-    
-    ini_m = hj.replace(day=1); fim_m = (ini_m + pd.DateOffset(months=1)) - pd.Timedelta(days=1)
-    if not df_f.empty:
-        df_m = df_f[(df_f['Data Final (aberta)'] >= ini_m) & (df_f['Data Final (aberta)'] <= fim_m)]
+        hj_periodo = pd.Timestamp.now().to_period('M')
+        idx_default_mes = 0
+        if hj_periodo in periodos_unicos_mes:
+            idx_default_mes = periodos_unicos_mes.index(hj_periodo)
+        
+        sel_mes_aba2_str = st.selectbox("Selecione o Mês para Visualizar:", opcoes_formatadas_mes, index=idx_default_mes)
+        idx_sel_mes = opcoes_formatadas_mes.index(sel_mes_aba2_str)
+        periodo_selecionado_mes = periodos_unicos_mes[idx_sel_mes]
+        data_ref_mes_grafico = periodo_selecionado_mes.start_time
+
+        nome_mes_header = meses_full_list.get(periodo_selecionado_mes.month, '').lower()
+        st.markdown(f"### Progresso do Mês ({nome_mes_header})")
+
+        fig_hm, last_hm = criar_grafico_historico_mensal(df_historico, data_referencia=data_ref_mes_grafico)
+        
+        if last_hm is not None:
+            col_met_m1, col_met_m2, col_met_m3 = st.columns(3)
+            col_met_m1.metric("Total Acumulado", f"{last_hm['Mensal_Tarefas']:.0f}")
+            col_met_m2.metric("🔴 Gap (Abertas)", f"{last_hm['Mensal_Tarefas'] - last_hm['Mensal_Fechadas']:.0f}")
+            col_met_m3.metric("🟢 Fechadas", f"{last_hm['Mensal_Fechadas']:.0f}")
+
+        st.plotly_chart(fig_hm, use_container_width=True)
+        
+        df_m = df_f[df_f['Periodo_Mes_Ref'] == periodo_selecionado_mes].copy()
+        
         if not df_m.empty:
             piv = pd.pivot_table(df_m[df_m['Status_Tarefa']=='Executado'], index='Encarregado', columns=df_m['Data Final (aberta)'].dt.day, values='ID', aggfunc='count', fill_value=0)
             st.subheader("Resumo do Mês")
@@ -791,6 +820,8 @@ with t2: # MÊS
                     if not fe.empty:
                         st.caption("🟢 Fechadas")
                         st.dataframe(fe[['Nome Task', 'Data Final', 'Link']], use_container_width=True, hide_index=True, column_config=column_config_mes)
+    else:
+        st.info("Sem dados suficientes para gerar a visualização mensal.")
 
 with t3: # PRODUTIVIDADE (Movida para 3ª posição)
     st.header("Curva de Produtividade (Acumulada)")
@@ -859,6 +890,7 @@ with t4: # BACKLOG (Movido para 4ª)
             st.dataframe(fechado[cols_bk_fechado].sort_values('Data Final', ascending=False), use_container_width=True, hide_index=True, column_config=column_config_backlog)
 
 with t5: # GERAL (Movido para 5ª)
+    # GAP SMALL APLICADO
     c_g1, c_g2 = st.columns(2, gap="small")
     with c_g1: st.plotly_chart(criar_grafico_produtividade_mensal(df_f), use_container_width=True)
     with c_g2: st.plotly_chart(criar_grafico_principal(df_f), use_container_width=True)
