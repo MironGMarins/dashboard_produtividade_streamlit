@@ -421,18 +421,18 @@ def criar_grafico_principal(df):
     vis_init_diasemana = [False]*total_traces; vis_init_diasemana[2] = True
 
     fig.update_layout(
-        title={'text': "<b>Gráfico Principal</b>", 'y': 0.98, 'x': 0.2, 'xanchor': 'center', 'yanchor': 'top'},
-        height=430, # Altura Ajustada
-        margin=dict(l=0, r=0, t=25, b=0), # MARGEM ZERO para expandir
+        title={'text': "<b>Gráfico Principal</b>", 'y': 0.97, 'x': 0.1, 'xanchor': 'center', 'yanchor': 'top'},
+        height=432, # Altura Ajustada
+        margin=dict(l=0, r=40, t=70, b=30), # MARGEM ZERO para expandir
         template='plotly_white',
-        legend=dict(orientation="h", yanchor="bottom", y=0.00, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.13, xanchor="right", x=1),
         updatemenus=[
-            dict(type="buttons", direction="right", x=1.0, y=1.0, xanchor="right", yanchor="top", buttons=[
+            dict(type="buttons", direction="right", x=1.0, y=1.13, xanchor="right", yanchor="top", buttons=[
                 dict(label="Dia do Mês", method="update", args=[{"visible": vis_init_dia}, {"updatemenus[1].buttons": buttons_dia, "xaxis.title": "Dia", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
                 dict(label="Semana do Mês", method="update", args=[{"visible": vis_init_semana}, {"updatemenus[1].buttons": buttons_semana, "xaxis.title": "Semana", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
                 dict(label="Dia da Semana", method="update", args=[{"visible": vis_init_diasemana}, {"updatemenus[1].buttons": buttons_diasemana, "xaxis.title": "Dia da Semana", "xaxis.type": "category", "xaxis.categoryorder": "array", "xaxis.categoryarray": ordem_dias}])
             ]),
-            dict(direction="down", x=0.0, y=0.92, xanchor="left", yanchor="top", showactive=True, buttons=buttons_dia)
+            dict(direction="down", x=-0.01, y=1.13, xanchor="left", yanchor="top", showactive=True, buttons=buttons_dia)
         ],
         xaxis=dict(title="Tempo", showgrid=False, showline=True, linecolor='black'),
         yaxis=dict(title="Quantidade", showgrid=True, gridcolor='lightgray')
