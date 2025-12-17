@@ -192,7 +192,7 @@ def carregar_dados_completos():
         data_inicio_source = df_source['Data Inicial'].min()
         if pd.notna(data_inicio_source) and data_inicio_source < data_inicio_analise: data_inicio_calendario = data_inicio_source
 
-    # --- 2. CRIAÇÃO DA TABELA CALENDÁRIO ---
+    # --- 2. CRIAÇÃO DA TABELA CALENDÁRIO (AGORA NO MOMENTO CERTO) ---
     tabela_calendario = pd.DataFrame({"Date": pd.date_range(start=data_inicio_calendario, end=data_fim_analise, freq='D')})
     tabela_calendario['Ano'] = tabela_calendario['Date'].dt.year
     meses_pt = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
@@ -221,6 +221,7 @@ def carregar_dados_completos():
         df_analise = df_analise_temp
         df_analise['Status_Funcionario'] = 'Outros'
     
+    # Processamento Final do Source (Agora com calendário disponível)
     if not df_source.empty:
         df_source_proc = df_source.copy()
         if 'Data Inicial' in df_source_proc.columns: df_source_proc['Data Inicial'] = converter_data_robusta(df_source_proc.get('Data Inicial', pd.Series()))
@@ -335,102 +336,38 @@ def criar_grafico_produtividade_mensal(df):
 
 def criar_grafico_principal(df):
     if df.empty: return go.Figure().update_layout(title="<b>Gráfico Principal</b>")
-    
     ordem_dias = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
-    
-    # 1. Agrupamento por DIA
     df_dia = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Dia']).size().reset_index(name='Contagem')
     df_dia_total = df_dia.groupby('Dia')['Contagem'].sum().reset_index()
-    
-    # 2. Agrupamento por SEMANA DO MÊS
-    # Garante que é numérico para ordenar corretamente
-    if 'Semana do Mês' in df.columns:
-        df['Semana do Mês'] = pd.to_numeric(df['Semana do Mês'], errors='coerce')
-        
     df_semana = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês']).size().reset_index(name='Contagem')
     df_semana_total = df_semana.groupby('Semana do Mês')['Contagem'].sum().reset_index()
-    
-    # 3. Agrupamento por DIA DA SEMANA
     df_diasemana_full = df.groupby(['Ano-Mês', 'Mes_Ano_Abrev', 'Semana do Mês', 'Nome Dia Semana']).size().reset_index(name='Contagem')
     df_diasemana_total = df_diasemana_full.groupby('Nome Dia Semana')['Contagem'].sum().reindex(ordem_dias).fillna(0).reset_index()
     df_diasemana_total['Contagem'] = recortar_zeros_pontas(df_diasemana_total['Contagem'])
     df_diasemana_total = df_diasemana_total.dropna(subset=['Contagem'])
-    
     mes_map = df[['Ano-Mês', 'Mes_Ano_Abrev']].drop_duplicates().sort_values('Ano-Mês')
     opcoes_meses = mes_map['Mes_Ano_Abrev'].tolist()
 
     fig = go.Figure()
+    # MARGENS FIXADAS conforme pedido: l=50, r=50, t=120, b=50
+    fig.add_trace(go.Scatter(x=df_dia_total['Dia'], y=df_dia_total['Contagem'], name='Soma (Dias)', visible=True, mode='lines+markers+text', text=df_dia_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
+    fig.add_trace(go.Scatter(x=df_semana_total['Semana do Mês'], y=df_semana_total['Contagem'], name='Soma (Semanas)', visible=False, mode='lines+markers+text', text=df_semana_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
+    fig.add_trace(go.Scatter(x=df_diasemana_total['Nome Dia Semana'], y=df_diasemana_total['Contagem'], name='Soma (Dia Semana)', visible=False, mode='lines+markers+text', text=df_diasemana_total['Contagem'], textposition='top center', line=dict(color='royalblue', width=3))) 
     
-    # TRACE 0: SOMA DIAS
-    fig.add_trace(go.Scatter(
-        x=df_dia_total['Dia'], 
-        y=df_dia_total['Contagem'], 
-        name='Soma (Dias)', 
-        visible=True, 
-        mode='lines+markers+text', 
-        text=df_dia_total['Contagem'], 
-        textposition='top center', 
-        line=dict(color='royalblue', width=3)
-    )) 
-    
-    # TRACE 1: SOMA SEMANAS (CORRIGIDO: Y=Contagem)
-    fig.add_trace(go.Scatter(
-        x=df_semana_total['Semana do Mês'], 
-        y=df_semana_total['Contagem'], 
-        name='Soma (Semanas)', 
-        visible=False, 
-        mode='lines+markers+text', 
-        text=df_semana_total['Contagem'], 
-        textposition='top center', 
-        line=dict(color='royalblue', width=3)
-    )) 
-    
-    # TRACE 2: SOMA DIAS DA SEMANA
-    fig.add_trace(go.Scatter(
-        x=df_diasemana_total['Nome Dia Semana'], 
-        y=df_diasemana_total['Contagem'], 
-        name='Soma (Dia Semana)', 
-        visible=False, 
-        mode='lines+markers+text', 
-        text=df_diasemana_total['Contagem'], 
-        textposition='top center', 
-        line=dict(color='royalblue', width=3)
-    )) 
-    
-    # LOOP MESES (DIAS)
     offset_dia = 3
     for mes in opcoes_meses:
         d = df_dia[df_dia['Mes_Ano_Abrev'] == mes].sort_values('Dia')
         d['Contagem'] = d['Contagem'].replace(0, np.nan)
-        fig.add_trace(go.Scatter(
-            x=d['Dia'], 
-            y=d['Contagem'], 
-            name=mes, 
-            visible=False, 
-            mode='lines+markers+text', 
-            text=d['Contagem'], 
-            textposition='top center'
-        ))
+        fig.add_trace(go.Scatter(x=d['Dia'], y=d['Contagem'], name=mes, visible=False, mode='lines+markers+text', text=d['Contagem'], textposition='top center'))
     count_dia = len(opcoes_meses)
 
-    # LOOP MESES (SEMANAS)
     offset_semana = offset_dia + count_dia
     for mes in opcoes_meses:
         d = df_semana[df_semana['Mes_Ano_Abrev'] == mes].sort_values('Semana do Mês')
         d['Contagem'] = d['Contagem'].replace(0, np.nan)
-        # CORRIGIDO: Y=Contagem
-        fig.add_trace(go.Scatter(
-            x=d['Semana do Mês'], 
-            y=d['Contagem'], 
-            name=mes, 
-            visible=False, 
-            mode='lines+markers+text', 
-            text=d['Contagem'], 
-            textposition='top center'
-        ))
+        fig.add_trace(go.Scatter(x=d['Semana do Mês'], y=d['Semana do Mês'], name=mes, visible=False, mode='lines+markers+text', text=d['Contagem'], textposition='top center'))
     count_semana = len(opcoes_meses)
 
-    # LOOP MESES (DIAS DA SEMANA)
     offset_diasemana = offset_semana + count_semana
     diasemana_trace_map = [] 
     for mes in opcoes_meses:
@@ -438,7 +375,6 @@ def criar_grafico_principal(df):
         d_mes['Contagem'] = recortar_zeros_pontas(d_mes['Contagem'])
         d_mes = d_mes.dropna(subset=['Contagem'])
         fig.add_trace(go.Scatter(x=d_mes['Nome Dia Semana'], y=d_mes['Contagem'], name=f"{mes} Agregado", visible=False, mode='lines+markers+text', text=d_mes['Contagem'], textposition='top center'))
-        
         semanas_do_mes = sorted(df_diasemana_full[df_diasemana_full['Mes_Ano_Abrev'] == mes]['Semana do Mês'].unique())
         for sem in semanas_do_mes:
             d_sem = df_diasemana_full[(df_diasemana_full['Mes_Ano_Abrev'] == mes) & (df_diasemana_full['Semana do Mês'] == sem)].set_index('Nome Dia Semana').reindex(ordem_dias).fillna(0).reset_index()
@@ -447,10 +383,7 @@ def criar_grafico_principal(df):
             fig.add_trace(go.Scatter(x=d_sem['Nome Dia Semana'], y=d_sem['Contagem'], name=f"{mes} Sem {sem}", visible=False, mode='lines+markers+text', text=d_sem['Contagem'], textposition='top center'))
         diasemana_trace_map.append({'mes': mes, 'num_semanas': len(semanas_do_mes)})
 
-    # CONFIGURAÇÃO DOS BOTÕES DE VISIBILIDADE
     total_traces = len(fig.data)
-    
-    # Botões DIA
     vis_total_agregado_dia = [False] * total_traces
     for i in range(count_dia): vis_total_agregado_dia[offset_dia + i] = True
     buttons_dia = [dict(label="Total Agregado", method="update", args=[{"visible": vis_total_agregado_dia}])]
@@ -458,7 +391,6 @@ def criar_grafico_principal(df):
         vis = [False]*total_traces; vis[offset_dia + i] = True
         buttons_dia.append(dict(label=mes, method="update", args=[{"visible": vis}]))
 
-    # Botões SEMANA
     vis_total_agregado_semana = [False] * total_traces
     for i in range(count_semana): vis_total_agregado_semana[offset_semana + i] = True
     buttons_semana = [dict(label="Total Agregado", method="update", args=[{"visible": vis_total_agregado_semana}])]
@@ -466,7 +398,6 @@ def criar_grafico_principal(df):
         vis = [False]*total_traces; vis[offset_semana + i] = True
         buttons_semana.append(dict(label=mes, method="update", args=[{"visible": vis}]))
 
-    # Botões DIA DA SEMANA
     vis_total_agregado_diasemana = [False] * total_traces
     temp_idx = offset_diasemana
     for item in diasemana_trace_map:
@@ -486,30 +417,30 @@ def criar_grafico_principal(df):
             buttons_diasemana.append(dict(label=f"{mes} Semana {s+1}", method="update", args=[{"visible": vis_sem}]))
             current_idx += 1
 
-    # Visibilidade Inicial
     vis_init_dia = [False]*total_traces; vis_init_dia[0] = True
     vis_init_semana = [False]*total_traces; vis_init_semana[1] = True
     vis_init_diasemana = [False]*total_traces; vis_init_diasemana[2] = True
 
     fig.update_layout(
-        title={'text': "<b>Gráfico Principal</b>", 'y': 0.97, 'x': 0.1, 'xanchor': 'center', 'yanchor': 'top'},
-        height=432, # Altura Ajustada
-        margin=dict(l=0, r=40, t=70, b=30), # MARGEM ZERO para expandir
+        title={'text': "<b>Gráfico Principal</b>", 'y': 0.98, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
+        height=500,
+        margin=dict(l=50, r=50, t=120, b=50), # Margens RESTAURADAS
         template='plotly_white',
-        legend=dict(orientation="h", yanchor="bottom", y=1.13, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         updatemenus=[
-            dict(type="buttons", direction="right", x=1.0, y=1.13, xanchor="right", yanchor="top", buttons=[
+            dict(type="buttons", direction="right", x=0.99, y=1.25, buttons=[
                 dict(label="Dia do Mês", method="update", args=[{"visible": vis_init_dia}, {"updatemenus[1].buttons": buttons_dia, "xaxis.title": "Dia", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
                 dict(label="Semana do Mês", method="update", args=[{"visible": vis_init_semana}, {"updatemenus[1].buttons": buttons_semana, "xaxis.title": "Semana", "xaxis.type": "linear", "xaxis.categoryarray": None}]),
                 dict(label="Dia da Semana", method="update", args=[{"visible": vis_init_diasemana}, {"updatemenus[1].buttons": buttons_diasemana, "xaxis.title": "Dia da Semana", "xaxis.type": "category", "xaxis.categoryorder": "array", "xaxis.categoryarray": ordem_dias}])
             ]),
-            dict(direction="down", x=-0.01, y=1.13, xanchor="left", yanchor="top", showactive=True, buttons=buttons_dia)
+            dict(direction="down", x=0.01, y=1.25, showactive=True, buttons=buttons_dia)
         ],
         xaxis=dict(title="Tempo", showgrid=False, showline=True, linecolor='black'),
         yaxis=dict(title="Quantidade", showgrid=True, gridcolor='lightgray')
     )
     return fig
 
+# --- FUNÇÃO OTIMIZADA PARA NUVEM DE BARRAS (NOMES CURTOS) ---
 def criar_grafico_tarefas_funcionarios(df):
     if df.empty: return go.Figure()
     
@@ -517,15 +448,13 @@ def criar_grafico_tarefas_funcionarios(df):
     v = df['Encarregado'].value_counts().reset_index()
     v.columns = ['Encarregado', 'count']
     
-    # --- ENCURTAR NOMES: Pega apenas o primeiro e último nome ---
-    v['Encarregado'] = v['Encarregado'].apply(
-        lambda x: f"{x.split()[0]} {x.split()[-1]}" if isinstance(x, str) and len(x.split()) > 1 else x
-    )
+    # --- MELHORIA: Encurtar Nomes (Primeiro + Último) ---
+    v['Encarregado'] = v['Encarregado'].apply(lambda x: f"{x.split()[0]} {x.split()[-1]}" if isinstance(x, str) and len(x.split()) > 1 else x)
 
     v = v.sort_values('count', ascending=True) 
 
-    # 2. Calcular Altura Dinâmica (35px por barra para garantir grossura)
-    altura_dinamica = max(400, len(v) * 28)
+    # 2. Calcular Altura Dinâmica
+    altura_dinamica = max(400, len(v) * 35)
 
     # 3. Criar Gráfico
     fig = px.bar(
@@ -539,15 +468,15 @@ def criar_grafico_tarefas_funcionarios(df):
         color_continuous_scale='Blues'
     )
 
-    # 4. Ajustar Layout (Margem esquerda aumentada para caber os nomes)
+    # 4. Ajustar Layout
     fig.update_layout(
         template='plotly_white',
         height=altura_dinamica, 
-        margin=dict(l=150, r=20, t=60, b=20), 
+        margin=dict(l=150, r=20, t=60, b=20), # Margem esquerda grande para nomes
         yaxis=dict(
             title=None,
             tickfont=dict(size=12),
-            dtick=1 # Força mostrar todos os nomes
+            dtick=1
         ),
         xaxis=dict(title="Quantidade de Tarefas")
     )
@@ -563,7 +492,7 @@ def criar_grafico_status_tarefas(df):
     fig.update_traces(textinfo='value+percent')
     return fig
 
-# --- NOVO GRÁFICO DE CRESCIMENTO (PRODUTIVIDADE) COM DATA DE ENTRADA/SAÍDA ---
+# --- NOVO GRÁFICO DE CRESCIMENTO (PRODUTIVIDADE) COM MÉDIA DINÂMICA (ENTRADA/SAÍDA) E MEDIANA ---
 def criar_grafico_crescimento_acumulado(df_plot, lista_encarregados, df_context=None):
     if df_plot.empty or not lista_encarregados:
         return go.Figure().update_layout(title="Sem dados ou nenhum encarregado selecionado", template='plotly_white')
@@ -598,16 +527,18 @@ def criar_grafico_crescimento_acumulado(df_plot, lista_encarregados, df_context=
     all_employees = set(df_history['Encarregado'].unique())
     
     active_counts_list = []
+    active_employees_per_day = []
     
     for current_day_ts in idx:
         current_date = current_day_ts.date()
         count_active = 0
+        active_today = []
         
         for enc in all_employees:
             dt_ent = start_dates.get(enc, pd.NaT)
             if pd.isna(dt_ent) or pd.isnull(dt_ent): 
-                val = fallback_starts.get(enc, pd.NaT)
-                if pd.notna(val): dt_ent = val.date() if isinstance(val, pd.Timestamp) else val
+                 val = fallback_starts.get(enc, pd.NaT)
+                 if pd.notna(val): dt_ent = val.date() if isinstance(val, pd.Timestamp) else val
             elif isinstance(dt_ent, pd.Timestamp): dt_ent = dt_ent.date()
 
             dt_sai = end_dates.get(enc, pd.NaT)
@@ -616,39 +547,120 @@ def criar_grafico_crescimento_acumulado(df_plot, lista_encarregados, df_context=
             if pd.notna(dt_ent) and current_date >= dt_ent:
                 if pd.isna(dt_sai) or current_date <= dt_sai:
                     count_active += 1
+                    active_today.append(enc)
+        
         active_counts_list.append(count_active)
+        active_employees_per_day.append(active_today)
             
-    active_team_size = pd.Series(active_counts_list, index=idx)
-    active_team_size = active_team_size.replace(0, 1)
+    active_team_size = pd.Series(active_counts_list, index=idx).replace(0, 1)
 
+    # 4. Calcular Média e MEDIANA Dinâmica
     daily_total_tasks = df_ex.groupby('Data').size()
     daily_total_tasks.index = pd.to_datetime(daily_total_tasks.index)
     daily_total_tasks = daily_total_tasks.reindex(idx, fill_value=0)
     
+    daily_tasks_per_person = df_ex.groupby(['Data', 'Encarregado']).size()
+    daily_medians = []
+    
+    for i, current_day_ts in enumerate(idx):
+        current_date = current_day_ts.date()
+        active_today = active_employees_per_day[i]
+        counts = []
+        for enc in active_today:
+            try: 
+                c = daily_tasks_per_person.get((pd.Timestamp(current_date), enc), 0)
+                if c == 0: c = daily_tasks_per_person.get((current_date, enc), 0)
+            except: c = 0
+            counts.append(c)
+        
+        if counts: med = np.median(counts)
+        else: med = 0
+        daily_medians.append(med)
+        
+    s_mediana_acumulada = pd.Series(daily_medians, index=idx).cumsum()
+
+    # Adiciona Linha da MEDIANA (Verde)
+    fig.add_trace(go.Scatter(
+        x=s_mediana_acumulada.index, 
+        y=s_mediana_acumulada.values, 
+        name='Mediana (Ritmo Padrão)', 
+        line=dict(color='green', width=4, dash='dot'), 
+        mode='lines',
+        hovertemplate='Data: %{x}<br>Mediana Acumulada: %{y:.1f}<br>Equipe Ativa: %{customdata} pessoas',
+        customdata=active_team_size
+    ))
+
+    # Recalcula Média Dinâmica (Preta)
     daily_avg_productivity = daily_total_tasks / active_team_size
     s_media_acumulada = daily_avg_productivity.cumsum()
     
     fig.add_trace(go.Scatter(
         x=s_media_acumulada.index, 
         y=s_media_acumulada.values, 
-        name='Média Per Capita (Acumulada)', 
-        line=dict(color='gray', width=4, dash='dot'),
+        name='Média Per Capita (Dinâmica)', 
+        line=dict(color='gray', width=3, dash='solid'), # CINZA conforme solicitado
         mode='lines',
-        hovertemplate='Data: %{x}<br>Média Acumulada: %{y:.1f}<br>Equipe Ativa: %{customdata} pessoas<extra></extra>',
-        customdata=active_team_size
+        hovertemplate='Data: %{x}<br>Média Acumulada: %{y:.1f}'
     ))
     
+    # Média Simples (Estática) para comparação
+    num_static_active = df_ex['Encarregado'].nunique()
+    if num_static_active < 1: num_static_active = 1
+    s_media_estatica = daily_total_tasks.cumsum() / num_static_active
+    
+    fig.add_trace(go.Scatter(
+        x=s_media_estatica.index, 
+        y=s_media_estatica.values, 
+        name='Média Simples (Estática)', 
+        line=dict(color='lightgray', width=2, dash='dot'),
+        mode='lines',
+        hovertemplate='Data: %{x}<br>Média Simples: %{y:.1f}'
+    ))
+
+    # 5. Linhas Individuais com ÂNGULO NA LEGENDA
     colors = px.colors.qualitative.Plotly
     for i, nome in enumerate(lista_encarregados):
         df_u = df_ex[df_ex['Encarregado'] == nome]
         if df_u.empty: continue
+        
         s_u = df_u.groupby('Data').size()
         s_u.index = pd.to_datetime(s_u.index)
         s_u = s_u.reindex(idx, fill_value=0).cumsum()
-        c = colors[i % len(colors)]
-        fig.add_trace(go.Scatter(x=s_u.index, y=s_u.values, name=nome, mode='lines+markers', line=dict(color=c, width=2)))
         
-    fig.update_layout(title="<b>Curva de Produtividade Acumulada (Entregas)</b>", template='plotly_white', xaxis=dict(title="Tempo"), yaxis=dict(title="Tarefas Entregues (Acumulado)"), hovermode="x unified")
+        # --- CÁLCULO DA VELOCIDADE (COEFICIENTE ANGULAR) ---
+        total_entregue = s_u.iloc[-1]
+        
+        dt_ent = start_dates.get(nome, pd.NaT)
+        if pd.isna(dt_ent): 
+             val = fallback_starts.get(nome, pd.NaT)
+             if pd.notna(val): dt_ent = val.date() if isinstance(val, pd.Timestamp) else val
+        elif isinstance(dt_ent, pd.Timestamp): dt_ent = dt_ent.date()
+
+        dt_sai = end_dates.get(nome, pd.NaT)
+        if isinstance(dt_sai, pd.Timestamp): dt_sai = dt_sai.date()
+        
+        dias_ativos_user = 0
+        for current_day_ts in idx:
+            c_date = current_day_ts.date()
+            if pd.notna(dt_ent) and c_date >= dt_ent:
+                if pd.isna(dt_sai) or c_date <= dt_sai:
+                    dias_ativos_user += 1
+        
+        if dias_ativos_user < 1: dias_ativos_user = 1
+        velocidade = total_entregue / dias_ativos_user
+        
+        nome_legenda = f"{nome} ({velocidade:.2f}/dia)"
+
+        c = colors[i % len(colors)]
+        fig.add_trace(go.Scatter(
+            x=s_u.index, 
+            y=s_u.values, 
+            name=nome_legenda, 
+            mode='lines+markers',
+            line=dict(color=c, width=2)
+        ))
+        
+    fig.update_layout(title="<b>Curva de Produtividade (Média vs Mediana)</b>", template='plotly_white', xaxis=dict(title="Tempo"), yaxis=dict(title="Tarefas Entregues (Acumulado)"), hovermode="x unified")
     return fig
 
 # --- GRÁFICO DE RANKING DE EFICIÊNCIA ---
@@ -701,7 +713,11 @@ def criar_grafico_ranking_eficiencia(df_plot, df_context=None):
         lista_metricas.append({'Encarregado': nome, 'Total': row['Total_Tarefas'], 'Dias Ativos': dias_ativos, 'Velocidade': velocidade})
         
     df_rank = pd.DataFrame(lista_metricas).sort_values('Velocidade', ascending=True)
-    altura_dinamica = max(300, len(df_rank) * 30)
+    
+    # --- MELHORIA: Encurtar Nomes (Primeiro + Último) ---
+    df_rank['Encarregado'] = df_rank['Encarregado'].apply(lambda x: f"{x.split()[0]} {x.split()[-1]}" if isinstance(x, str) and len(x.split()) > 1 else x)
+    
+    altura_dinamica = max(400, len(df_rank) * 50)
     fig = px.bar(df_rank, x='Velocidade', y='Encarregado', orientation='h', text='Velocidade', title="<b>Ranking de Produtividade Per Capita (Velocidade Média)</b>", color='Velocidade', color_continuous_scale='Viridis')
     fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
     fig.update_layout(template='plotly_white', xaxis_title="Tarefas por Dia Ativo", yaxis_title=None, height=altura_dinamica, margin=dict(l=150), yaxis=dict(tickfont=dict(size=11)))
@@ -784,7 +800,7 @@ if all_dates:
 else:
     min_date, max_date = date.today(), date.today()
 
-# ESTABILIZAÇÃO DE ESTADO PARA EVITAR PULO NA PRIMEIRA INTERAÇÃO
+# INICIALIZAÇÃO DE ESTADO
 if 'filtros_iniciados' not in st.session_state:
     st.session_state.encarregado_filtro = ["Todos"]
     st.session_state.contrato_filtro = "Todos"
@@ -825,7 +841,7 @@ with c1:
 with c3:
     st.slider("Período", min_value=min_date, max_value=max_date, key='date_slider')
 
-# Aplica filtros de tempo
+# Aplica filtros de tempo após a renderização dos widgets
 if st.session_state.semana_filtro != "Todos": df_f = df_f[df_f['Semana do Mês'] == st.session_state.semana_filtro]
 d_ini, d_fim = st.session_state.date_slider
 if not df_f.empty: df_f = df_f[(df_f['Data Final (aberta)'].dt.date >= d_ini) & (df_f['Data Final (aberta)'].dt.date <= d_fim)]
@@ -880,7 +896,7 @@ with t1: # SEMANA
         st.markdown("---"); st.subheader("Detalhes da Semana")
         for enc in sorted(df_sem['Encarregado'].unique()):
             d_e = df_sem[df_sem['Encarregado'] == enc]
-            ab = d_e[d_e['Status_Tarefa']=='Aberto']; fe = d_e[d_e['Status_Tarefa']=='Executado']
+            ab = d_e[d_e['Status_Tarefa'] == 'Aberto']; fe = d_e[d_e['Status_Tarefa']=='Executado']
             with st.expander(f"{enc} ({len(d_e)}) - 🔴 {len(ab)} | 🟢 {len(fe)}"):
                 column_config_semana = {"Link": st.column_config.LinkColumn("Link", display_text="Abrir ↗"), "Data Inicial": st.column_config.DateColumn("Data Inicial", format="DD/MM/YYYY"), "Data Final": st.column_config.DateColumn("Data Final", format="DD/MM/YYYY")}
                 if not ab.empty: st.caption("Abertas"); st.dataframe(ab[['Nome Task','Data Inicial', 'Link']], use_container_width=True, hide_index=True, column_config=column_config_semana)
@@ -912,7 +928,6 @@ with t2: # MÊS
         st.markdown(f"### Progresso do Mês ({nome_mes_header})")
 
         fig_hm, last_hm = criar_grafico_historico_mensal(df_historico, data_referencia=data_ref_mes_grafico)
-        
         if last_hm is not None:
             col_met_m1, col_met_m2, col_met_m3 = st.columns(3)
             col_met_m1.metric("Total Acumulado", f"{last_hm['Mensal_Tarefas']:.0f}")
@@ -958,53 +973,69 @@ with t2: # MÊS
 
 with t3: # PRODUTIVIDADE
     st.header("Curva de Produtividade (Acumulada)")
-    modo_visualizacao = st.radio("Escolha o escopo de tempo:", ["📅 Visão Mensal", "📈 Visão Geral (Histórico Completo)"], horizontal=True)
-    st.markdown("---")
     
-    df_prod_base = df_analise.copy() if df_analise is not None else pd.DataFrame()
-    if not df_prod_base.empty:
-        # Re-apply sidebar filters manually to ensure independence from top-level "Week" slider
-        if "Todos" not in st.session_state.encarregado_filtro: 
-            df_prod_base = df_prod_base[df_prod_base['Encarregado'].isin(st.session_state.encarregado_filtro)]
-        if st.session_state.contrato_filtro != "Todos": 
-            df_prod_base = df_prod_base[df_prod_base['Status_Funcionario'] == st.session_state.contrato_filtro]
-        if st.session_state.status_tarefa_filtro != "Todos": 
-            df_prod_base = df_prod_base[df_prod_base['Status_Tarefa'] == st.session_state.status_tarefa_filtro]
+    modo_visualizacao = st.radio(
+        "Escolha o escopo de tempo:",
+        ["📅 Visão Mensal", "📈 Visão Geral (Histórico Completo)"],
+        horizontal=True
+    )
+    
+    st.markdown("---")
 
-    if not df_prod_base.empty and 'Data Final (aberta)' in df_prod_base.columns:
+    if not df_f.empty and 'Data Final (aberta)' in df_f.columns:
+        
         df_prod_plot = pd.DataFrame()
+        
         if modo_visualizacao == "📅 Visão Mensal":
-            df_prod_base['Periodo_Mes'] = df_prod_base['Data Final (aberta)'].dt.to_period('M')
-            periodos_unicos = sorted(df_prod_base['Periodo_Mes'].dropna().unique(), reverse=True)
-            if not periodos_unicos: st.info("Não há datas válidas."); df_prod_plot = pd.DataFrame()
+            # ESTABILIZAÇÃO: Usa df_analise para gerar lista de meses
+            df_analise['Periodo_Mes'] = df_analise['Data Final (aberta)'].dt.to_period('M')
+            periodos_unicos = sorted(df_analise['Periodo_Mes'].dropna().unique(), reverse=True)
+            
+            if not periodos_unicos:
+                st.info("Não há datas válidas para gerar a lista de meses.")
             else:
                 meses_full_prod = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Jun', 7: 'Jul', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
                 opcoes_formatadas = [f"{meses_full_prod[p.month]} {p.year}" for p in periodos_unicos]
+                
                 hj_periodo = pd.Timestamp.now().to_period('M')
                 idx_default = periodos_unicos.index(hj_periodo) if hj_periodo in periodos_unicos else 0
                 sel_mes_str = st.selectbox("Selecione o Mês de Referência:", opcoes_formatadas, index=idx_default)
                 idx_sel = opcoes_formatadas.index(sel_mes_str)
                 periodo_selecionado = periodos_unicos[idx_sel]
-                df_prod_plot = df_prod_base[df_prod_base['Periodo_Mes'] == periodo_selecionado].copy()
+                
+                # Filtra df_f (já filtrado pela lateral) pelo mês selecionado
+                df_f['Periodo_Mes'] = df_f['Data Final (aberta)'].dt.to_period('M')
+                df_prod_plot = df_f[df_f['Periodo_Mes'] == periodo_selecionado].copy()
                 titulo_legenda = f"crescimento diário em **{sel_mes_str}**"
+
         else:
-            d_ini, d_fim = st.session_state.date_slider
-            df_prod_plot = df_prod_base[(df_prod_base['Data Final (aberta)'].dt.date >= d_ini) & (df_prod_base['Data Final (aberta)'].dt.date <= d_fim)].copy()
+            # Visão Geral: Usa todo o período filtrado lateralmente e pelo slider
+            df_prod_plot = df_f.copy()
             titulo_legenda = "crescimento acumulado de **todo o período selecionado**"
 
         if not df_prod_plot.empty:
             todos_enc = sorted(df_prod_plot['Encarregado'].unique())
-            sel_enc_prod = st.multiselect("Selecione Encarregados para Comparar:", options=todos_enc, default=todos_enc)
+            sel_enc_prod = st.multiselect(
+                "Selecione Encarregados para Comparar:", 
+                options=todos_enc,
+                default=todos_enc 
+            )
+            
             st.caption(f"Exibindo {titulo_legenda}")
             
-            # PASSANDO CONTEXTO GLOBAL (df_analise) para datas de entrada/saída corretas
+            # PASSA CONTEXTO GLOBAL (df_analise)
             fig_cresc = criar_grafico_crescimento_acumulado(df_prod_plot, sel_enc_prod, df_context=df_analise)
             st.plotly_chart(fig_cresc, use_container_width=True)
+            
             st.markdown("---")
             fig_rank = criar_grafico_ranking_eficiencia(df_prod_plot, df_context=df_analise)
             st.plotly_chart(fig_rank, use_container_width=True)
-        else: st.info("Sem dados de tarefas executadas para o período.")
-    else: st.info("Sem dados disponíveis.")
+            
+        else:
+            st.info("Sem dados de tarefas executadas para o período selecionado com os filtros atuais.")
+
+    else:
+        st.info("Sem dados de tarefas disponíveis para gerar a curva de produtividade.")
 
 with t4: # BACKLOG
     if df_backlog is not None and not df_backlog.empty:
@@ -1033,15 +1064,19 @@ with t6: # PONTUAÇÃO
     if df_equipe is not None and not df_equipe.empty:
         if st.session_state.contrato_filtro == "Todos": nomes = df_equipe['Nome'].unique().tolist()
         else: nomes = df_equipe[df_equipe['Status_Funcionario'] == st.session_state.contrato_filtro]['Nome'].unique().tolist()
+    
     if "Todos" not in st.session_state.encarregado_filtro:
         if not nomes: nomes = st.session_state.encarregado_filtro
         else: nomes = list(set(nomes) & set(st.session_state.encarregado_filtro))
+    
     f_ind, df_ind_t = criar_grafico_pontuacao_individual(df_notas_tabela1, nomes, d_ini, d_fim)
     st.plotly_chart(f_ind, use_container_width=True)
     with st.expander("Dados Individuais"): st.dataframe(df_ind_t, use_container_width=True, hide_index=True)
+    
     st.markdown("---")
     f_lid, df_lid_t, _ = criar_grafico_pontuacao_lideres(df_lideranca_mapa, df_notas_tabela2, nomes, d_ini, d_fim)
     st.plotly_chart(f_lid, use_container_width=True)
+    
     st.markdown("---")
     f_tot = criar_grafico_pontuacao_combinada(df_notas_tabela1, df_notas_tabela2, df_lideranca_mapa, nomes, d_ini, d_fim)
     st.plotly_chart(f_tot, use_container_width=True)
