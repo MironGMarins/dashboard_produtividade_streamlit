@@ -1021,12 +1021,38 @@ with t4: # BACKLOG
         with st.expander(f"🟢 Fechados ({len(fechado)})"): cols_bk_fechado = ['Encarregado'] + cols_bk; st.dataframe(fechado[cols_bk_fechado].sort_values('Data Final', ascending=False), use_container_width=True, hide_index=True, column_config=column_config_backlog)
 
 with t5: # GERAL
+    # --- SELETOR DE ANO (Correção para Virada de Ano) ---
+    anos_disponiveis = []
+    
+    # Garante que temos a coluna 'Ano' baseada na data final
+    if not df_f.empty and 'Data Final (aberta)' in df_f.columns:
+         df_f['Ano'] = df_f['Data Final (aberta)'].dt.year
+         anos_disponiveis = sorted(df_f['Ano'].dropna().unique().astype(int), reverse=True)
+    
+    df_geral = df_f.copy()
+    
+    # Só mostra o filtro se houver mais de um ano de dados (ex: 2025 e 2026)
+    if len(anos_disponiveis) > 1:
+        col_ano, _ = st.columns([1, 4])
+        with col_ano:
+            # key='ano_geral_sel' evita conflitos com outros seletores
+            ano_sel = st.selectbox("📅 Selecione o Ano:", anos_disponiveis, index=0, key='ano_geral_sel')
+        
+        # Filtra TODOS os gráficos desta aba pelo ano selecionado
+        df_geral = df_f[df_f['Ano'] == ano_sel]
+
+    # --- PLOTAGEM DOS GRÁFICOS (Usando df_geral filtrado) ---
     c_g1, c_g2 = st.columns(2, gap="small")
-    with c_g1: st.plotly_chart(criar_grafico_produtividade_mensal(df_f), use_container_width=True)
-    with c_g2: st.plotly_chart(criar_grafico_principal(df_f), use_container_width=True)
+    with c_g1: 
+        st.plotly_chart(criar_grafico_produtividade_mensal(df_geral), use_container_width=True)
+    with c_g2: 
+        st.plotly_chart(criar_grafico_principal(df_geral), use_container_width=True)
+    
     c_g3, c_g4 = st.columns(2)
-    with c_g3: st.plotly_chart(criar_grafico_tarefas_funcionarios(df_f), use_container_width=True)
-    with c_g4: st.plotly_chart(criar_grafico_status_tarefas(df_f), use_container_width=True)
+    with c_g3: 
+        st.plotly_chart(criar_grafico_tarefas_funcionarios(df_geral), use_container_width=True)
+    with c_g4: 
+        st.plotly_chart(criar_grafico_status_tarefas(df_geral), use_container_width=True)
 
 with t6: # PONTUAÇÃO
     nomes = []
