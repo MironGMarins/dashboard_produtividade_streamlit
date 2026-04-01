@@ -897,7 +897,7 @@ with st.sidebar:
     if df_analise is not None:
         l_enc = ["Todos"] + sorted(df_analise['Encarregado'].unique())
         st.multiselect("Encarregado", l_enc, key='encarregado_filtro')
-        l_status = ["Todos"] + sorted(df_analise['Status_Funcionario'].unique())
+        l_status = ["Todos"] + sorted(df_analise['Status_Funcionario'].dropna().unique())
         st.selectbox("Contrato", l_status, key='contrato_filtro')
         l_st_tar = ["Todos"] + sorted(df_analise['Status_Tarefa'].unique())
         st.selectbox("Status Tarefa", l_st_tar, key='status_tarefa_filtro')
